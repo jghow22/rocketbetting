@@ -1,21 +1,24 @@
-import requests
-import pandas as pd
+from fastapi import FastAPI
+import uvicorn
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-import os
-from datetime import datetime
+import pandas as pd
+import requests
 
-# The Odds API credentials and settings (use environment variables for security)
+# The Odds API credentials and settings
 API_KEY = os.getenv("ODDS_API_KEY")
-NFL_BASE_URL = 'https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds'
 NBA_BASE_URL = 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds'
 
-# Define models and scalers globally
+# Define FastAPI app
+app = FastAPI()
+
+# Define model and scaler
 nba_model = None
 nba_scaler = None
 
-# Function to fetch odds from The Odds API
+# Function to fetch odds
 def fetch_odds(api_key, base_url):
     params = {
         'apiKey': api_key,
@@ -24,14 +27,13 @@ def fetch_odds(api_key, base_url):
         'oddsFormat': 'decimal',
     }
     response = requests.get(base_url, params=params)
-
     if response.status_code == 200:
         return response.json()
     else:
         print(f"Failed to fetch odds: {response.status_code} - {response.text}")
         return None
 
-# Function to extract features for NBA games
+# Function to extract features
 def extract_features(odds_data):
     games = []
     for game in odds_data:
@@ -55,7 +57,6 @@ def extract_features(odds_data):
 
                         home_prob = 1 / home_odds
                         away_prob = 1 / away_odds
-
                         total_prob = home_prob + away_prob
                         home_prob /= total_prob
                         away_prob /= total_prob
@@ -69,41 +70,31 @@ def extract_features(odds_data):
                         })
     return pd.DataFrame(games)
 
-# Function to predict game outcomes
-def predict_game_outcome(model, scaler, features):
-    if model is None or scaler is None:
-        return 0.5
-
-    scaled_features = scaler.transform([features])
-    win_prob = model.predict_proba(scaled_features)[0][1]
-    return win_prob
-
-# Train the NBA model
-def train_nba_model():
+# Endpoint to train NBA model
+@app.get("/train")
+def train_model():
     global nba_model, nba_scaler
-    initial_nba_odds_data = fetch_odds(API_KEY, NBA_BASE_URL)
-    if initial_nba_odds_data:
-        nba_data = extract_features(initial_nba_odds_data)
-
+    nba_odds = fetch_odds(API_KEY, NBA_BASE_URL)
+    if nba_odds:
+        nba_data = extract_features(nba_odds)
         if not nba_data.empty:
             nba_features = nba_data[['home_prob', 'away_prob']]
             nba_target = nba_data['label']
-
             X_train, X_test, y_train, y_test = train_test_split(nba_features, nba_target, test_size=0.2, random_state=42)
-
             nba_scaler = StandardScaler()
             X_train_scaled = nba_scaler.fit_transform(X_train)
-            X_test_scaled = nba_scaler.transform(X_test)
-
             nba_model = LogisticRegression()
             nba_model.fit(X_train_scaled, y_train)
-
-            print("NBA model trained successfully.")
+            return {"message": "NBA model trained successfully!"}
         else:
-            print("No valid data extracted from NBA odds.")
-    else:
-        print("Failed to fetch NBA odds data.")
+            return {"error": "No valid NBA data extracted from odds."}
+    return {"error": "Failed to fetch NBA odds data."}
 
-# Entry point
+# Root endpoint
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to the Sports Betting API!"}
+
 if __name__ == "__main__":
-    train_nba_model()
+    # Run the FastAPI app
+    uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
