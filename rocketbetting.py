@@ -64,31 +64,22 @@ def extract_features(odds_data):
                         games.append({
                             'home_team': home_team,
                             'away_team': away_team,
-                            'home_prob': home_prob,
-                            'away_prob': away_prob,
-                            'label': 1 if home_prob > away_prob else 0,
+                            'date': game.get('commence_time', 'TBD').split("T")[0],
+                            'time': game.get('commence_time', 'TBD').split("T")[1][:5] if "T" in game.get('commence_time', "") else "TBD",
                         })
-    return pd.DataFrame(games)
+    return games
 
-# Endpoint to train NBA model
-@app.get("/train")
-def train_model():
-    global nba_model, nba_scaler
+# Endpoint to fetch game schedule
+@app.get("/games")
+def get_games():
     nba_odds = fetch_odds(API_KEY, NBA_BASE_URL)
     if nba_odds:
-        nba_data = extract_features(nba_odds)
-        if not nba_data.empty:
-            nba_features = nba_data[['home_prob', 'away_prob']]
-            nba_target = nba_data['label']
-            X_train, X_test, y_train, y_test = train_test_split(nba_features, nba_target, test_size=0.2, random_state=42)
-            nba_scaler = StandardScaler()
-            X_train_scaled = nba_scaler.fit_transform(X_train)
-            nba_model = LogisticRegression()
-            nba_model.fit(X_train_scaled, y_train)
-            return {"message": "NBA model trained successfully!"}
+        games = extract_features(nba_odds)
+        if games:
+            return games
         else:
-            return {"error": "No valid NBA data extracted from odds."}
-    return {"error": "Failed to fetch NBA odds data."}
+            return {"error": "No valid games found."}
+    return {"error": "Failed to fetch NBA odds."}
 
 # Root endpoint
 @app.get("/")
