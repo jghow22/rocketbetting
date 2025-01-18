@@ -3,4 +3,4 @@ requests
 scikit-learn
 fastapi
 uvicorn
-openai
+openai>=1.0.0
