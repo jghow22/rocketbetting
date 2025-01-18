@@ -78,13 +78,14 @@ def generate_best_pick_with_ai(game_descriptions):
     prompt += "\n".join(game_descriptions)
 
     try:
-        response = openai.Completion.create(
-            engine="text-davinci-003",
-            prompt=prompt,
-            max_tokens=150,
-            temperature=0.7
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting assistant."},
+                {"role": "user", "content": prompt}
+            ]
         )
-        return response.choices[0].text.strip()
+        return response['choices'][0]['message']['content'].strip()
     except Exception as e:
         print(f"OpenAI API Error: {e}")
         return {"error": "Failed to generate a recommendation."}
@@ -107,4 +108,5 @@ def read_root():
     return {"message": "Welcome to the Sports Betting API!"}
 
 if __name__ == "__main__":
+    # Run the FastAPI app
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
