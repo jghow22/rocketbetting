@@ -1,11 +1,12 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
+import requests
+import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-import pandas as pd
-import requests
 
 # The Odds API credentials and settings
 API_KEY = os.getenv("ODDS_API_KEY")
@@ -13,6 +14,15 @@ NBA_BASE_URL = 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds'
 
 # Define FastAPI app
 app = FastAPI()
+
+# Add CORS middleware to the app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins or specify your Wix site URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all HTTP headers
+)
 
 # Define model and scaler
 nba_model = None
