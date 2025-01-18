@@ -3,30 +3,31 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 import requests
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
+import openai
 
 # The Odds API credentials and settings
 API_KEY = os.getenv("ODDS_API_KEY")
-NBA_BASE_URL = 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds'
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+SPORTS_BASE_URLS = {
+    "NBA": 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds',
+    "NFL": 'https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds',
+    "MLS": 'https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds'
+}
 
-# Define FastAPI app
+# Initialize FastAPI app
 app = FastAPI()
 
-# Add CORS middleware to the app
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins or specify your Wix site URL
+    allow_origins=["*"],  # Allow all origins, or specify your Wix domain
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all HTTP headers
 )
 
-# Define model and scaler
-nba_model = None
-nba_scaler = None
+# OpenAI API setup
+openai.api_key = OPENAI_API_KEY
 
 # Function to fetch odds
 def fetch_odds(api_key, base_url):
@@ -43,53 +44,62 @@ def fetch_odds(api_key, base_url):
         print(f"Failed to fetch odds: {response.status_code} - {response.text}")
         return None
 
-# Function to extract features
-def extract_features(odds_data):
-    games = []
+# Function to format data for OpenAI
+def format_odds_for_ai(odds_data, sport):
+    game_descriptions = []
     for game in odds_data:
-        home_team = game.get('home_team')
-        away_team = game.get('away_team')
-
+        home_team = game.get("home_team")
+        away_team = game.get("away_team")
         if not home_team or not away_team:
             continue
 
-        if game.get('bookmakers'):
-            bookmaker = game['bookmakers'][0]
-            for market in bookmaker.get('markets', []):
-                if market['key'] == 'h2h':
-                    outcomes = market.get('outcomes', [])
+        if game.get("bookmakers"):
+            bookmaker = game["bookmakers"][0]
+            for market in bookmaker.get("markets", []):
+                if market["key"] == "h2h":
+                    outcomes = market.get("outcomes", [])
                     if len(outcomes) >= 2:
-                        home_odds = next((o.get('price') for o in outcomes if o.get('name') == home_team), None)
-                        away_odds = next((o.get('price') for o in outcomes if o.get('name') == away_team), None)
+                        home_odds = next((o.get("price") for o in outcomes if o.get("name") == home_team), None)
+                        away_odds = next((o.get("price") for o in outcomes if o.get("name") == away_team), None)
 
-                        if not home_odds or not away_odds:
-                            continue
+                        if home_odds and away_odds:
+                            game_descriptions.append(f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}")
+    return game_descriptions
 
-                        home_prob = 1 / home_odds
-                        away_prob = 1 / away_odds
-                        total_prob = home_prob + away_prob
-                        home_prob /= total_prob
-                        away_prob /= total_prob
+# Function to generate the best pick using OpenAI
+def generate_best_pick_with_ai(game_descriptions):
+    if not game_descriptions:
+        return {"error": "No valid games to analyze."}
 
-                        games.append({
-                            'home_team': home_team,
-                            'away_team': away_team,
-                            'date': game.get('commence_time', 'TBD').split("T")[0],
-                            'time': game.get('commence_time', 'TBD').split("T")[1][:5] if "T" in game.get('commence_time', "") else "TBD",
-                        })
-    return games
+    prompt = (
+        "You are an AI expert in sports betting. Analyze the following games and recommend the best straight bet based "
+        "on the given odds. Provide the sport, the recommended team, and a brief explanation:\n\n"
+    )
+    prompt += "\n".join(game_descriptions)
 
-# Endpoint to fetch game schedule
-@app.get("/games")
-def get_games():
-    nba_odds = fetch_odds(API_KEY, NBA_BASE_URL)
-    if nba_odds:
-        games = extract_features(nba_odds)
-        if games:
-            return games
-        else:
-            return {"error": "No valid games found."}
-    return {"error": "Failed to fetch NBA odds."}
+    try:
+        response = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=prompt,
+            max_tokens=150,
+            temperature=0.7
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        print(f"OpenAI API Error: {e}")
+        return {"error": "Failed to generate a recommendation."}
+
+# Endpoint to get the best straight bet
+@app.get("/best-pick")
+def get_best_pick():
+    game_descriptions = []
+    for sport, base_url in SPORTS_BASE_URLS.items():
+        odds_data = fetch_odds(API_KEY, base_url)
+        if odds_data:
+            game_descriptions.extend(format_odds_for_ai(odds_data, sport))
+
+    best_pick = generate_best_pick_with_ai(game_descriptions)
+    return {"best_pick": best_pick}
 
 # Root endpoint
 @app.get("/")
@@ -97,5 +107,4 @@ def read_root():
     return {"message": "Welcome to the Sports Betting API!"}
 
 if __name__ == "__main__":
-    # Run the FastAPI app
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
