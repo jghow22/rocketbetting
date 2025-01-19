@@ -207,14 +207,15 @@ def get_player_best_bet():
     player_descriptions = []
     for sport, base_url in SPORTS_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
+        print(f"Raw player data for {sport}: {odds_data}")  # Debugging log
         if odds_data:
             formatted_data = format_player_odds_for_ai(odds_data, sport)
             player_descriptions.extend(formatted_data)
-            print(f"Player data for {sport}: {formatted_data}")  # Debugging log
+            print(f"Formatted player data for {sport}: {formatted_data}")  # Debugging log
 
     if not player_descriptions:
         print("No player-specific data found.")
-        return {"error": "No valid player bets found. Please check available data or API plan."}
+        return {"error": "Player picks unavailable at this time. This could be due to API data limitations or lack of active player props."}
 
     best_player_bet = generate_best_player_bet_with_ai(player_descriptions)
     if isinstance(best_player_bet, dict) and "error" in best_player_bet:
