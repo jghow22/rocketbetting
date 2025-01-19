@@ -21,19 +21,16 @@ app.add_middleware(
 print(f"Using OpenAI API key: {os.getenv('OPENAI_API_KEY')[:5]}*****")
 print(f"Using Odds API key: {os.getenv('ODDS_API_KEY')[:5]}*****")
 
-# The Odds API credentials and settings
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SPORTS_BASE_URLS = {
     "NBA": 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds',
     "NFL": 'https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds',
-    "MLS": 'https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds'
+    "MLS": 'https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds',
 }
 
-# Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
 
-# Function to fetch odds
 def fetch_odds(api_key, base_url):
     params = {
         'apiKey': api_key,
@@ -41,16 +38,11 @@ def fetch_odds(api_key, base_url):
         'markets': 'h2h',
         'oddsFormat': 'decimal',
     }
-    print(f"Fetching odds from {base_url} with params: {params}")
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
-        print(f"Successfully fetched data for {base_url}")
         return response.json()
-    else:
-        print(f"Failed to fetch odds: {response.status_code} - {response.text}")
-        return None
+    return None
 
-# Function to format data for OpenAI
 def format_odds_for_ai(odds_data, sport):
     game_descriptions = []
     for game in odds_data:
@@ -72,7 +64,6 @@ def format_odds_for_ai(odds_data, sport):
                             game_descriptions.append(f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}")
     return game_descriptions
 
-# Function to generate the best pick using OpenAI
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
@@ -93,10 +84,8 @@ def generate_best_pick_with_ai(game_descriptions):
         )
         return response['choices'][0]['message']['content'].strip()
     except Exception as e:
-        print(f"OpenAI API Error: {e}")
-        return {"error": "Failed to generate a recommendation."}
+        return {"error": f"Failed to generate a recommendation: {e}"}
 
-# Function to generate the best parlay using OpenAI
 def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
@@ -117,26 +106,32 @@ def generate_best_parlay_with_ai(game_descriptions):
         )
         return response['choices'][0]['message']['content'].strip()
     except Exception as e:
-        print(f"OpenAI API Error: {e}")
-        return {"error": "Failed to generate a recommendation."}
+        return {"error": f"Failed to generate a recommendation: {e}"}
 
-# Endpoint to get the best NBA parlay bet
+@app.get("/nba-best-pick")
+def get_nba_best_pick():
+    nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
+    if not nba_odds_data:
+        return {"error": "No NBA games found."}
+
+    game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
+    nba_best_pick = generate_best_pick_with_ai(game_descriptions)
+    if isinstance(nba_best_pick, dict) and "error" in nba_best_pick:
+        return {"error": nba_best_pick["error"]}
+    return {"nba_best_pick": nba_best_pick}
+
 @app.get("/nba-best-parlay")
 def get_nba_best_parlay():
     nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
     if not nba_odds_data:
-        print("No NBA games found.")
         return {"error": "No NBA games found."}
 
     game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
     nba_best_parlay = generate_best_parlay_with_ai(game_descriptions)
     if isinstance(nba_best_parlay, dict) and "error" in nba_best_parlay:
-        print("Error generating NBA parlay:", nba_best_parlay["error"])
         return {"error": nba_best_parlay["error"]}
-    print("Generated NBA parlay:", nba_best_parlay)
     return {"nba_best_parlay": nba_best_parlay}
 
-# Existing endpoints remain unchanged
 @app.get("/games")
 def get_games():
     all_games = []
@@ -166,7 +161,6 @@ def get_best_parlay():
 
     return {"best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Root endpoint
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Sports Betting API!"}
