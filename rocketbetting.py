@@ -5,15 +5,6 @@ import os
 import requests
 import openai
 
-# The Odds API credentials and settings
-API_KEY = os.getenv("ODDS_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SPORTS_BASE_URLS = {
-    "NBA": 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds',
-    "NFL": 'https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds',
-    "MLS": 'https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds'
-}
-
 # Initialize FastAPI app
 app = FastAPI()
 
@@ -26,7 +17,20 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all HTTP headers
 )
 
-# OpenAI API setup
+# Debugging: Print API keys (masked for security)
+print(f"Using OpenAI API key: {os.getenv('OPENAI_API_KEY')[:5]}*****")
+print(f"Using Odds API key: {os.getenv('ODDS_API_KEY')[:5]}*****")
+
+# The Odds API credentials and settings
+API_KEY = os.getenv("ODDS_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+SPORTS_BASE_URLS = {
+    "NBA": 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds',
+    "NFL": 'https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds',
+    "MLS": 'https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds'
+}
+
+# Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
 
 # Function to fetch odds
