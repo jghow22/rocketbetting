@@ -112,8 +112,55 @@ def get_nba_best_pick():
     print("Generated NBA best pick:", nba_best_pick)
     return {"nba_best_pick": nba_best_pick}
 
-# Existing endpoints remain the same
-# /best-pick, /best-parlay, /games, etc.
+# Endpoint to get the best overall straight bet
+@app.get("/best-pick")
+def get_best_pick():
+    game_descriptions = []
+    for sport, base_url in SPORTS_BASE_URLS.items():
+        odds_data = fetch_odds(API_KEY, base_url)
+        print(f"Fetched {len(odds_data) if odds_data else 0} games for {sport}.")
+        if odds_data:
+            game_descriptions.extend(format_odds_for_ai(odds_data, sport))
+
+    best_pick = generate_best_pick_with_ai(game_descriptions)
+    if isinstance(best_pick, dict) and "error" in best_pick:
+        print("Error generating best pick:", best_pick["error"])
+        return {"error": best_pick["error"]}
+    print("Generated best pick:", best_pick)
+    return {"best_pick": best_pick}
+
+# Endpoint to get the best parlay bet
+@app.get("/best-parlay")
+def get_best_parlay():
+    game_descriptions = []
+    for sport, base_url in SPORTS_BASE_URLS.items():
+        odds_data = fetch_odds(API_KEY, base_url)
+        print(f"Fetched {len(odds_data) if odds_data else 0} games for {sport}.")
+        if odds_data:
+            game_descriptions.extend(format_odds_for_ai(odds_data, sport))
+
+    best_parlay = generate_best_pick_with_ai(game_descriptions)
+    if isinstance(best_parlay, dict) and "error" in best_parlay:
+        print("Error generating parlay:", best_parlay["error"])
+        return {"error": best_parlay["error"]}
+    print("Generated parlay:", best_parlay)
+    return {"best_parlay": best_parlay}
+
+# Endpoint to fetch the game schedule
+@app.get("/games")
+def get_games():
+    all_games = []
+    for sport, base_url in SPORTS_BASE_URLS.items():
+        odds_data = fetch_odds(API_KEY, base_url)
+        print(f"Fetched {len(odds_data) if odds_data else 0} games for {sport}.")
+        if odds_data:
+            all_games.extend(odds_data)
+    if all_games:
+        print(f"Returning {len(all_games)} games.")
+        return all_games
+    else:
+        print("No games found. Please check The Odds API key or plan.")
+        return {"error": "No games found. Verify The Odds API key and plan."}
 
 # Root endpoint
 @app.get("/")
