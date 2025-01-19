@@ -31,11 +31,11 @@ SPORTS_BASE_URLS = {
 
 openai.api_key = OPENAI_API_KEY
 
-def fetch_odds(api_key, base_url):
+def fetch_odds(api_key, base_url, markets="h2h"):
     params = {
         'apiKey': api_key,
         'regions': 'us',
-        'markets': 'h2h',
+        'markets': markets,
         'oddsFormat': 'decimal',
     }
     response = requests.get(base_url, params=params)
@@ -63,6 +63,19 @@ def format_odds_for_ai(odds_data, sport):
                         if home_odds and away_odds:
                             game_descriptions.append(f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}")
     return game_descriptions
+
+def format_player_odds_for_ai(odds_data, sport):
+    player_descriptions = []
+    for game in odds_data:
+        if "player_props" not in game:
+            continue
+        for player in game["player_props"]:
+            player_name = player.get("name")
+            bet_type = player.get("type")
+            odds = player.get("price")
+            if player_name and bet_type and odds:
+                player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
+    return player_descriptions
 
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
@@ -108,29 +121,27 @@ def generate_best_parlay_with_ai(game_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate a recommendation: {e}"}
 
-@app.get("/nba-best-pick")
-def get_nba_best_pick():
-    nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
-    if not nba_odds_data:
-        return {"error": "No NBA games found."}
+def generate_best_player_bet_with_ai(player_descriptions):
+    if not player_descriptions:
+        return {"error": "No valid player bets to analyze."}
 
-    game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
-    nba_best_pick = generate_best_pick_with_ai(game_descriptions)
-    if isinstance(nba_best_pick, dict) and "error" in nba_best_pick:
-        return {"error": nba_best_pick["error"]}
-    return {"nba_best_pick": nba_best_pick}
+    prompt = (
+        "You are an AI expert in sports betting. Analyze the following player-specific betting options and recommend the "
+        "best individual player bet based on the given odds. Provide the sport, the player's name, and a brief explanation:\n\n"
+    )
+    prompt += "\n".join(player_descriptions)
 
-@app.get("/nba-best-parlay")
-def get_nba_best_parlay():
-    nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
-    if not nba_odds_data:
-        return {"error": "No NBA games found."}
-
-    game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
-    nba_best_parlay = generate_best_parlay_with_ai(game_descriptions)
-    if isinstance(nba_best_parlay, dict) and "error" in nba_best_parlay:
-        return {"error": nba_best_parlay["error"]}
-    return {"nba_best_parlay": nba_best_parlay}
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting assistant."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response['choices'][0]['message']['content'].strip()
+    except Exception as e:
+        return {"error": f"Failed to generate a recommendation: {e}"}
 
 @app.get("/games")
 def get_games():
@@ -160,6 +171,34 @@ def get_best_parlay():
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
 
     return {"best_parlay": generate_best_parlay_with_ai(game_descriptions)}
+
+@app.get("/nba-best-pick")
+def get_nba_best_pick():
+    nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
+    if not nba_odds_data:
+        return {"error": "No NBA games found."}
+
+    game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
+    return {"nba_best_pick": generate_best_pick_with_ai(game_descriptions)}
+
+@app.get("/nba-best-parlay")
+def get_nba_best_parlay():
+    nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
+    if not nba_odds_data:
+        return {"error": "No NBA games found."}
+
+    game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
+    return {"nba_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
+
+@app.get("/player-best-bet")
+def get_player_best_bet():
+    player_descriptions = []
+    for sport, base_url in SPORTS_BASE_URLS.items():
+        odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
+        if odds_data:
+            player_descriptions.extend(format_player_odds_for_ai(odds_data, sport))
+
+    return {"best_player_bet": generate_best_player_bet_with_ai(player_descriptions)}
 
 @app.get("/")
 def read_root():
