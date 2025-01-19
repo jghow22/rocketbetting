@@ -72,6 +72,30 @@ def format_odds_for_ai(odds_data, sport):
                             game_descriptions.append(f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}")
     return game_descriptions
 
+# Function to generate the best pick using OpenAI
+def generate_best_pick_with_ai(game_descriptions):
+    if not game_descriptions:
+        return {"error": "No valid games to analyze."}
+
+    prompt = (
+        "You are an AI expert in sports betting. Analyze the following games and recommend the best straight bet based "
+        "on the given odds. Provide the sport, the recommended team, and a brief explanation:\n\n"
+    )
+    prompt += "\n".join(game_descriptions)
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting assistant."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response['choices'][0]['message']['content'].strip()
+    except Exception as e:
+        print(f"OpenAI API Error: {e}")
+        return {"error": "Failed to generate a recommendation."}
+
 # Function to generate the best parlay using OpenAI
 def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
@@ -106,7 +130,11 @@ def get_best_pick():
         if odds_data:
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
 
-    best_pick = generate_best_parlay_with_ai(game_descriptions)
+    best_pick = generate_best_pick_with_ai(game_descriptions)  # Ensure this generates a single pick
+    if isinstance(best_pick, dict) and "error" in best_pick:
+        print("Error generating best pick:", best_pick["error"])
+        return {"error": best_pick["error"]}
+    print("Generated best pick:", best_pick)
     return {"best_pick": best_pick}
 
 # Endpoint to get the best parlay bet
@@ -119,7 +147,11 @@ def get_best_parlay():
         if odds_data:
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
 
-    best_parlay = generate_best_parlay_with_ai(game_descriptions)
+    best_parlay = generate_best_parlay_with_ai(game_descriptions)  # Ensure this generates a parlay
+    if isinstance(best_parlay, dict) and "error" in best_parlay:
+        print("Error generating parlay:", best_parlay["error"])
+        return {"error": best_parlay["error"]}
+    print("Generated parlay:", best_parlay)
     return {"best_parlay": best_parlay}
 
 # Endpoint to fetch the game schedule
