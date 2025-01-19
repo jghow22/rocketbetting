@@ -41,8 +41,10 @@ def fetch_odds(api_key, base_url):
         'markets': 'h2h',
         'oddsFormat': 'decimal',
     }
+    print(f"Fetching odds from {base_url} with params: {params}")
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
+        print(f"Successfully fetched data for {base_url}")
         return response.json()
     else:
         print(f"Failed to fetch odds: {response.status_code} - {response.text}")
@@ -100,6 +102,7 @@ def get_best_pick():
     game_descriptions = []
     for sport, base_url in SPORTS_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url)
+        print(f"Fetched {len(odds_data) if odds_data else 0} games for {sport}.")
         if odds_data:
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
 
@@ -119,8 +122,8 @@ def get_games():
         print(f"Returning {len(all_games)} games.")
         return all_games
     else:
-        print("No games found.")
-        return {"error": "No games found."}
+        print("No games found. Please check The Odds API key or plan.")
+        return {"error": "No games found. Verify The Odds API key and plan."}
 
 # Root endpoint
 @app.get("/")
