@@ -106,6 +106,22 @@ def get_best_pick():
     best_pick = generate_best_pick_with_ai(game_descriptions)
     return {"best_pick": best_pick}
 
+# Endpoint to fetch the game schedule
+@app.get("/games")
+def get_games():
+    all_games = []
+    for sport, base_url in SPORTS_BASE_URLS.items():
+        odds_data = fetch_odds(API_KEY, base_url)
+        print(f"Fetched {len(odds_data) if odds_data else 0} games for {sport}.")
+        if odds_data:
+            all_games.extend(odds_data)
+    if all_games:
+        print(f"Returning {len(all_games)} games.")
+        return all_games
+    else:
+        print("No games found.")
+        return {"error": "No games found."}
+
 # Root endpoint
 @app.get("/")
 def read_root():
