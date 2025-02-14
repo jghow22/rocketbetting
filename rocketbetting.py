@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
@@ -13,8 +13,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allow all origins, or specify your Wix domain
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all HTTP headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Debugging: Print API keys (masked for security)
@@ -63,7 +63,9 @@ def format_odds_for_ai(odds_data, sport):
                         away_odds = next((o.get("price") for o in outcomes if o.get("name") == away_team), None)
 
                         if home_odds and away_odds:
-                            game_descriptions.append(f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}")
+                            game_descriptions.append(
+                                f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}"
+                            )
     return game_descriptions
 
 # Function to format player props for AI
@@ -80,7 +82,7 @@ def format_player_odds_for_ai(odds_data, sport):
                 player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
     return player_descriptions
 
-# Function to generate best pick with AI
+# Functions to generate recommendations with OpenAI (unchanged)
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
@@ -90,7 +92,6 @@ def generate_best_pick_with_ai(game_descriptions):
         "on the given odds. Provide the sport, the recommended team, and a brief explanation:\n\n"
     )
     prompt += "\n".join(game_descriptions)
-
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -103,7 +104,6 @@ def generate_best_pick_with_ai(game_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate a recommendation: {e}"}
 
-# Function to generate best parlay with AI
 def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
@@ -113,7 +113,6 @@ def generate_best_parlay_with_ai(game_descriptions):
         "Include the sport, the teams involved, and explain why this parlay is a strong choice:\n\n"
     )
     prompt += "\n".join(game_descriptions)
-
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -126,7 +125,6 @@ def generate_best_parlay_with_ai(game_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate a recommendation: {e}"}
 
-# Function to generate best player bet with AI
 def generate_best_player_bet_with_ai(player_descriptions):
     if not player_descriptions:
         return {"error": "No valid player bets to analyze."}
@@ -136,7 +134,6 @@ def generate_best_player_bet_with_ai(player_descriptions):
         "best individual player bet based on the given odds. Provide the sport, the player's name, and a brief explanation:\n\n"
     )
     prompt += "\n".join(player_descriptions)
-
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -149,17 +146,32 @@ def generate_best_player_bet_with_ai(player_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate a recommendation: {e}"}
 
-# Endpoint: Fetch game schedule
+# Updated schedule endpoint: supports an optional 'sport' query parameter
 @app.get("/games")
-def get_games():
-    all_games = []
-    for sport, base_url in SPORTS_BASE_URLS.items():
-        odds_data = fetch_odds(API_KEY, base_url)
-        if odds_data:
-            all_games.extend(odds_data)
-    return all_games if all_games else {"error": "No games found."}
+def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, MLS)")):
+    if sport:
+        base_url = SPORTS_BASE_URLS.get(sport.upper())
+        if base_url:
+            odds_data = fetch_odds(API_KEY, base_url)
+            if odds_data:
+                for game in odds_data:
+                    game["sport"] = sport.upper()
+                return odds_data
+            else:
+                return {"error": f"No games found for {sport}."}
+        else:
+            return {"error": "Sport not supported."}
+    else:
+        all_games = []
+        for sport_key, base_url in SPORTS_BASE_URLS.items():
+            odds_data = fetch_odds(API_KEY, base_url)
+            if odds_data:
+                for game in odds_data:
+                    game["sport"] = sport_key
+                all_games.extend(odds_data)
+        return all_games if all_games else {"error": "No games found."}
 
-# Endpoint: Best overall straight bet
+# Existing endpoints for overall and sport-specific bets
 @app.get("/best-pick")
 def get_best_pick():
     game_descriptions = []
@@ -169,7 +181,6 @@ def get_best_pick():
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
     return {"best_pick": generate_best_pick_with_ai(game_descriptions)}
 
-# Endpoint: Best overall parlay bet
 @app.get("/best-parlay")
 def get_best_parlay():
     game_descriptions = []
@@ -230,7 +241,7 @@ def get_mls_best_parlay():
     game_descriptions = format_odds_for_ai(mls_odds_data, "MLS")
     return {"mls_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Endpoint: Best player-specific bet (across all sports)
+# Endpoint for player-specific bet (across all sports)
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
@@ -251,10 +262,9 @@ def get_player_best_bet():
         print("Error generating player bet:", best_player_bet["error"])
         return {"error": best_player_bet["error"]}
     
-    print("Generated player bet:", best_player_bet)  # Debugging log
+    print("Generated player bet:", best_player_bet)
     return {"best_player_bet": best_player_bet}
 
-# Root endpoint
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Sports Betting API!"}
