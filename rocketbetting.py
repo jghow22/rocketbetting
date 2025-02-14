@@ -167,7 +167,6 @@ def get_best_pick():
         odds_data = fetch_odds(API_KEY, base_url)
         if odds_data:
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
-
     return {"best_pick": generate_best_pick_with_ai(game_descriptions)}
 
 # Endpoint: Best overall parlay bet
@@ -178,30 +177,60 @@ def get_best_parlay():
         odds_data = fetch_odds(API_KEY, base_url)
         if odds_data:
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
-
     return {"best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Endpoint: Best NBA straight bet
+# NBA Endpoints
 @app.get("/nba-best-pick")
 def get_nba_best_pick():
     nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
     if not nba_odds_data:
         return {"error": "No NBA games found."}
-
     game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
     return {"nba_best_pick": generate_best_pick_with_ai(game_descriptions)}
 
-# Endpoint: Best NBA parlay bet
 @app.get("/nba-best-parlay")
 def get_nba_best_parlay():
     nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
     if not nba_odds_data:
         return {"error": "No NBA games found."}
-
     game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
     return {"nba_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Endpoint: Best player-specific bet
+# NFL Endpoints
+@app.get("/nfl-best-pick")
+def get_nfl_best_pick():
+    nfl_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NFL"])
+    if not nfl_odds_data:
+        return {"error": "No NFL games found."}
+    game_descriptions = format_odds_for_ai(nfl_odds_data, "NFL")
+    return {"nfl_best_pick": generate_best_pick_with_ai(game_descriptions)}
+
+@app.get("/nfl-best-parlay")
+def get_nfl_best_parlay():
+    nfl_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NFL"])
+    if not nfl_odds_data:
+        return {"error": "No NFL games found."}
+    game_descriptions = format_odds_for_ai(nfl_odds_data, "NFL")
+    return {"nfl_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
+
+# MLS Endpoints
+@app.get("/mls-best-pick")
+def get_mls_best_pick():
+    mls_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLS"])
+    if not mls_odds_data:
+        return {"error": "No MLS games found."}
+    game_descriptions = format_odds_for_ai(mls_odds_data, "MLS")
+    return {"mls_best_pick": generate_best_pick_with_ai(game_descriptions)}
+
+@app.get("/mls-best-parlay")
+def get_mls_best_parlay():
+    mls_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLS"])
+    if not mls_odds_data:
+        return {"error": "No MLS games found."}
+    game_descriptions = format_odds_for_ai(mls_odds_data, "MLS")
+    return {"mls_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
+
+# Endpoint: Best player-specific bet (across all sports)
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
