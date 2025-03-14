@@ -4,6 +4,7 @@ import uvicorn
 import os
 import requests
 import openai
+import json  # For parsing JSON output from OpenAI
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -82,17 +83,17 @@ def format_player_odds_for_ai(odds_data, sport):
                 player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
     return player_descriptions
 
-# Updated functions to generate recommendations with OpenAI
+# Updated functions to generate recommendations with OpenAI using JSON output
 
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
 
-    # Updated prompt: Evaluate context and do not select solely based on odds
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific straight bet that you consider the best. "
-        "DO NOT choose a bet solely because it has the highest odds; instead, evaluate matchups, team performance, and potential risks. "
-        "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Bet: [Team Name]. Explanation: [Your reasoning]'.\n\n"
+        "DO NOT choose a bet solely based on high odds. Evaluate matchup context, team performance, injuries, and risk factors. "
+        "Your answer MUST be a valid JSON object exactly in the following format (with no additional commentary):\n"
+        '{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Your reasoning]"}\n\n'
     )
     prompt += "\n".join(game_descriptions)
     try:
@@ -103,19 +104,21 @@ def generate_best_pick_with_ai(game_descriptions):
                 {"role": "user", "content": prompt}
             ]
         )
-        return response['choices'][0]['message']['content'].strip()
+        rec_text = response['choices'][0]['message']['content'].strip()
+        rec_json = json.loads(rec_text)
+        return f"Sport: {rec_json['sport']} - Bet: {rec_json['bet']}. Explanation: {rec_json['explanation']}"
     except Exception as e:
-        return {"error": f"Failed to generate a recommendation: {e}"}
+        return {"error": f"Failed to generate or parse straight bet recommendation: {e}"}
 
 def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
 
-    # Updated prompt: Evaluate contextual factors and risk distribution, not just best odds
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific parlay bet that you consider the best. "
-        "DO NOT choose a parlay solely because it includes bets with the highest odds; instead, consider game matchups, risk distribution, and overall value. "
-        "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Parlay: [Team 1] & [Team 2] (add more teams if applicable). Explanation: [Your reasoning]'.\n\n"
+        "DO NOT choose a parlay solely because it includes bets with the highest odds. Consider game matchups, risk distribution, and overall value. "
+        "Your answer MUST be a valid JSON object exactly in the following format (with no additional commentary):\n"
+        '{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Your reasoning]"}\n\n'
     )
     prompt += "\n".join(game_descriptions)
     try:
@@ -126,19 +129,21 @@ def generate_best_parlay_with_ai(game_descriptions):
                 {"role": "user", "content": prompt}
             ]
         )
-        return response['choices'][0]['message']['content'].strip()
+        rec_text = response['choices'][0]['message']['content'].strip()
+        rec_json = json.loads(rec_text)
+        return f"Sport: {rec_json['sport']} - Parlay: {rec_json['parlay']}. Explanation: {rec_json['explanation']}"
     except Exception as e:
-        return {"error": f"Failed to generate a recommendation: {e}"}
+        return {"error": f"Failed to generate or parse parlay recommendation: {e}"}
 
 def generate_best_player_bet_with_ai(player_descriptions):
     if not player_descriptions:
         return {"error": "No valid player bets to analyze."}
 
-    # Updated prompt: Evaluate player props based on performance and matchup context, not solely odds
     prompt = (
         "You are an expert sports betting assistant. Analyze the following player-specific betting options and choose one specific player bet that you consider the best. "
-        "DO NOT select the bet solely based on the highest odds; consider player performance, matchup context, and overall value. "
-        "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Player Bet: [Player Name] on [Bet Type]. Explanation: [Your reasoning]'.\n\n"
+        "DO NOT select a bet solely based on the highest odds; consider player performance, matchup context, and overall value. "
+        "Your answer MUST be a valid JSON object exactly in the following format (with no additional commentary):\n"
+        '{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Your reasoning]"}\n\n'
     )
     prompt += "\n".join(player_descriptions)
     try:
@@ -149,9 +154,11 @@ def generate_best_player_bet_with_ai(player_descriptions):
                 {"role": "user", "content": prompt}
             ]
         )
-        return response['choices'][0]['message']['content'].strip()
+        rec_text = response['choices'][0]['message']['content'].strip()
+        rec_json = json.loads(rec_text)
+        return f"Sport: {rec_json['sport']} - Player Bet: {rec_json['player_bet']}. Explanation: {rec_json['explanation']}"
     except Exception as e:
-        return {"error": f"Failed to generate a recommendation: {e}"}
+        return {"error": f"Failed to generate or parse player bet recommendation: {e}"}
 
 # Updated schedule endpoint: supports an optional 'sport' query parameter
 @app.get("/games")
@@ -254,11 +261,11 @@ def get_player_best_bet():
     player_descriptions = []
     for sport, base_url in SPORTS_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
-        print(f"Raw player data for {sport}: {odds_data}")  # Debugging log
+        print(f"Raw player data for {sport}: {odds_data}")  # Debug log
         if odds_data:
             formatted_data = format_player_odds_for_ai(odds_data, sport)
             player_descriptions.extend(formatted_data)
-            print(f"Formatted player data for {sport}: {formatted_data}")  # Debugging log
+            print(f"Formatted player data for {sport}: {formatted_data}")  # Debug log
 
     if not player_descriptions:
         print("No player-specific data found.")
