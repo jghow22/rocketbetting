@@ -88,9 +88,10 @@ def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
 
-    # Updated prompt to force one specific straight bet recommendation in a strict format
+    # Updated prompt: Evaluate context and do not select solely based on odds
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific straight bet that you consider the best. "
+        "DO NOT choose a bet solely because it has the highest odds; instead, evaluate matchups, team performance, and potential risks. "
         "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Bet: [Team Name]. Explanation: [Your reasoning]'.\n\n"
     )
     prompt += "\n".join(game_descriptions)
@@ -110,9 +111,10 @@ def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
 
-    # Updated prompt to force one specific parlay bet recommendation in a strict format
+    # Updated prompt: Evaluate contextual factors and risk distribution, not just best odds
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific parlay bet that you consider the best. "
+        "DO NOT choose a parlay solely because it includes bets with the highest odds; instead, consider game matchups, risk distribution, and overall value. "
         "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Parlay: [Team 1] & [Team 2] (add more teams if applicable). Explanation: [Your reasoning]'.\n\n"
     )
     prompt += "\n".join(game_descriptions)
@@ -132,9 +134,10 @@ def generate_best_player_bet_with_ai(player_descriptions):
     if not player_descriptions:
         return {"error": "No valid player bets to analyze."}
 
-    # Updated prompt to force one specific player bet recommendation in a strict format
+    # Updated prompt: Evaluate player props based on performance and matchup context, not solely odds
     prompt = (
         "You are an expert sports betting assistant. Analyze the following player-specific betting options and choose one specific player bet that you consider the best. "
+        "DO NOT select the bet solely based on the highest odds; consider player performance, matchup context, and overall value. "
         "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Player Bet: [Player Name] on [Bet Type]. Explanation: [Your reasoning]'.\n\n"
     )
     prompt += "\n".join(player_descriptions)
