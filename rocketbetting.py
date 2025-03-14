@@ -82,14 +82,16 @@ def format_player_odds_for_ai(odds_data, sport):
                 player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
     return player_descriptions
 
-# Functions to generate recommendations with OpenAI (unchanged)
+# Updated functions to generate recommendations with OpenAI
+
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
 
+    # Updated prompt to force one specific straight bet recommendation in a strict format
     prompt = (
-        "You are an AI expert in sports betting. Analyze the following games and recommend the best straight bet based "
-        "on the given odds. Provide the sport, the recommended team, and a brief explanation:\n\n"
+        "You are an expert sports betting assistant. Analyze the following games and choose one specific straight bet that you consider the best. "
+        "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Bet: [Team Name]. Explanation: [Your reasoning]'.\n\n"
     )
     prompt += "\n".join(game_descriptions)
     try:
@@ -108,9 +110,10 @@ def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
 
+    # Updated prompt to force one specific parlay bet recommendation in a strict format
     prompt = (
-        "You are an AI expert in sports betting. Create the best parlay bet from the following games. "
-        "Include the sport, the teams involved, and explain why this parlay is a strong choice:\n\n"
+        "You are an expert sports betting assistant. Analyze the following games and choose one specific parlay bet that you consider the best. "
+        "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Parlay: [Team 1] & [Team 2] (add more teams if applicable). Explanation: [Your reasoning]'.\n\n"
     )
     prompt += "\n".join(game_descriptions)
     try:
@@ -129,9 +132,10 @@ def generate_best_player_bet_with_ai(player_descriptions):
     if not player_descriptions:
         return {"error": "No valid player bets to analyze."}
 
+    # Updated prompt to force one specific player bet recommendation in a strict format
     prompt = (
-        "You are an AI expert in sports betting. Analyze the following player-specific betting options and recommend the "
-        "best individual player bet based on the given odds. Provide the sport, the player's name, and a brief explanation:\n\n"
+        "You are an expert sports betting assistant. Analyze the following player-specific betting options and choose one specific player bet that you consider the best. "
+        "Your answer MUST follow this EXACT format: 'Sport: [Sport Name] - Player Bet: [Player Name] on [Bet Type]. Explanation: [Your reasoning]'.\n\n"
     )
     prompt += "\n".join(player_descriptions)
     try:
