@@ -4,7 +4,8 @@ import uvicorn
 import os
 import requests
 import openai
-import json  # For parsing JSON output from OpenAI
+import json
+import re  # For extracting JSON via regex
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -32,6 +33,16 @@ SPORTS_BASE_URLS = {
 
 openai.api_key = OPENAI_API_KEY
 
+def extract_json(text):
+    """Attempt to extract a JSON object from the text using regex."""
+    match = re.search(r'(\{.*\})', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            return None
+    return None
+
 # Function to fetch odds
 def fetch_odds(api_key, base_url, markets="h2h"):
     params = {
@@ -53,7 +64,6 @@ def format_odds_for_ai(odds_data, sport):
         away_team = game.get("away_team")
         if not home_team or not away_team:
             continue
-
         if game.get("bookmakers"):
             bookmaker = game["bookmakers"][0]
             for market in bookmaker.get("markets", []):
@@ -62,7 +72,6 @@ def format_odds_for_ai(odds_data, sport):
                     if len(outcomes) >= 2:
                         home_odds = next((o.get("price") for o in outcomes if o.get("name") == home_team), None)
                         away_odds = next((o.get("price") for o in outcomes if o.get("name") == away_team), None)
-
                         if home_odds and away_odds:
                             game_descriptions.append(
                                 f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}"
@@ -83,16 +92,15 @@ def format_player_odds_for_ai(odds_data, sport):
                 player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
     return player_descriptions
 
-# Updated functions to generate recommendations with OpenAI using JSON output
+# Updated functions to generate recommendations with OpenAI using strict JSON output and fallback extraction
 
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
-
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific straight bet that you consider the best. "
         "DO NOT choose a bet solely based on high odds. Evaluate matchup context, team performance, injuries, and risk factors. "
-        "Your answer MUST be a valid JSON object exactly in the following format (with no additional commentary):\n"
+        "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
         '{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Your reasoning]"}\n\n'
     )
     prompt += "\n".join(game_descriptions)
@@ -100,24 +108,28 @@ def generate_best_pick_with_ai(game_descriptions):
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant."},
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond only with the valid JSON object as instructed."},
                 {"role": "user", "content": prompt}
             ]
         )
         rec_text = response['choices'][0]['message']['content'].strip()
-        rec_json = json.loads(rec_text)
+        try:
+            rec_json = json.loads(rec_text)
+        except Exception as e:
+            rec_json = extract_json(rec_text)
+            if not rec_json:
+                return {"error": f"JSON parsing error in straight bet response: {e}. Response was: {rec_text}"}
         return f"Sport: {rec_json['sport']} - Bet: {rec_json['bet']}. Explanation: {rec_json['explanation']}"
     except Exception as e:
-        return {"error": f"Failed to generate or parse straight bet recommendation: {e}"}
+        return {"error": f"Failed to generate straight bet recommendation: {e}"}
 
 def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
-
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific parlay bet that you consider the best. "
-        "DO NOT choose a parlay solely because it includes bets with the highest odds. Consider game matchups, risk distribution, and overall value. "
-        "Your answer MUST be a valid JSON object exactly in the following format (with no additional commentary):\n"
+        "DO NOT choose a parlay solely because it includes bets with the highest odds. Consider matchups, risk distribution, and overall value. "
+        "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
         '{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Your reasoning]"}\n\n'
     )
     prompt += "\n".join(game_descriptions)
@@ -125,24 +137,28 @@ def generate_best_parlay_with_ai(game_descriptions):
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant."},
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond only with the valid JSON object as instructed."},
                 {"role": "user", "content": prompt}
             ]
         )
         rec_text = response['choices'][0]['message']['content'].strip()
-        rec_json = json.loads(rec_text)
+        try:
+            rec_json = json.loads(rec_text)
+        except Exception as e:
+            rec_json = extract_json(rec_text)
+            if not rec_json:
+                return {"error": f"JSON parsing error in parlay response: {e}. Response was: {rec_text}"}
         return f"Sport: {rec_json['sport']} - Parlay: {rec_json['parlay']}. Explanation: {rec_json['explanation']}"
     except Exception as e:
-        return {"error": f"Failed to generate or parse parlay recommendation: {e}"}
+        return {"error": f"Failed to generate parlay recommendation: {e}"}
 
 def generate_best_player_bet_with_ai(player_descriptions):
     if not player_descriptions:
-        return {"error": "No valid player bets to analyze."}
-
+        return {"error": "Player prop bets are unavailable for this sport."}
     prompt = (
         "You are an expert sports betting assistant. Analyze the following player-specific betting options and choose one specific player bet that you consider the best. "
         "DO NOT select a bet solely based on the highest odds; consider player performance, matchup context, and overall value. "
-        "Your answer MUST be a valid JSON object exactly in the following format (with no additional commentary):\n"
+        "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
         '{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Your reasoning]"}\n\n'
     )
     prompt += "\n".join(player_descriptions)
@@ -150,15 +166,20 @@ def generate_best_player_bet_with_ai(player_descriptions):
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant."},
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond only with the valid JSON object as instructed."},
                 {"role": "user", "content": prompt}
             ]
         )
         rec_text = response['choices'][0]['message']['content'].strip()
-        rec_json = json.loads(rec_text)
+        try:
+            rec_json = json.loads(rec_text)
+        except Exception as e:
+            rec_json = extract_json(rec_text)
+            if not rec_json:
+                return {"error": f"JSON parsing error in player bet response: {e}. Response was: {rec_text}"}
         return f"Sport: {rec_json['sport']} - Player Bet: {rec_json['player_bet']}. Explanation: {rec_json['explanation']}"
     except Exception as e:
-        return {"error": f"Failed to generate or parse player bet recommendation: {e}"}
+        return {"error": f"Failed to generate player bet recommendation: {e}"}
 
 # Updated schedule endpoint: supports an optional 'sport' query parameter
 @app.get("/games")
@@ -185,7 +206,7 @@ def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, 
                 all_games.extend(odds_data)
         return all_games if all_games else {"error": "No games found."}
 
-# Existing endpoints for overall and sport-specific bets
+# Overall endpoints for bets
 @app.get("/best-pick")
 def get_best_pick():
     game_descriptions = []
@@ -269,12 +290,12 @@ def get_player_best_bet():
 
     if not player_descriptions:
         print("No player-specific data found.")
-        return {"error": "Player picks unavailable at this time. This could be due to API data limitations or lack of active player props."}
+        return {"best_player_bet": "Player prop bets are unavailable for this sport."}
 
     best_player_bet = generate_best_player_bet_with_ai(player_descriptions)
     if isinstance(best_player_bet, dict) and "error" in best_player_bet:
         print("Error generating player bet:", best_player_bet["error"])
-        return {"error": best_player_bet["error"]}
+        return {"best_player_bet": best_player_bet["error"]}
     
     print("Generated player bet:", best_player_bet)
     return {"best_player_bet": best_player_bet}
