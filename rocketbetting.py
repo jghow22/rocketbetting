@@ -34,6 +34,13 @@ SPORTS_BASE_URLS = {
     "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
 }
 
+# Dedicated endpoints for player prop data (no trailing slash)
+PLAYER_PROP_BASE_URLS = {
+    "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/playerprops",
+    "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/playerprops",
+    "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/playerprops",
+}
+
 openai.api_key = OPENAI_API_KEY
 
 def extract_json(text):
@@ -85,16 +92,21 @@ def format_odds_for_ai(odds_data, sport):
 
 def format_player_odds_for_ai(odds_data, sport):
     player_descriptions = []
-    # The new API returns player prop data on the standard odds endpoint when markets are set to player prop keys.
-    # We assume odds_data is a list of game objects that include a "player_props" key.
-    for game in odds_data:
-        if "player_props" in game:
-            for prop in game["player_props"]:
-                player_name = prop.get("name")
-                bet_type = prop.get("type")
-                odds = prop.get("price")
-                if player_name and bet_type and odds:
-                    player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
+    # Assume the dedicated player props endpoint returns a list of prop objects
+    if isinstance(odds_data, list):
+        for prop in odds_data:
+            player_name = prop.get("name")
+            bet_type = prop.get("type")
+            odds = prop.get("price")
+            if player_name and bet_type and odds:
+                player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
+    elif isinstance(odds_data, dict) and "player_props" in odds_data:
+        for prop in odds_data["player_props"]:
+            player_name = prop.get("name")
+            bet_type = prop.get("type")
+            odds = prop.get("price")
+            if player_name and bet_type and odds:
+                player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
     return player_descriptions
 
 def get_sport_hint(descriptions):
@@ -305,24 +317,21 @@ def get_mls_best_parlay():
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
-    # For player props, use the standard odds endpoint with specific markets
-    for sport, base_url in SPORTS_BASE_URLS.items():
-        odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions="us")
+    # Use the dedicated player props endpoint for each sport.
+    for sport, base_url in PLAYER_PROP_BASE_URLS.items():
+        odds_data = fetch_odds(API_KEY, base_url, markets=None, regions="us")
         print(f"Raw player data for {sport}: {odds_data}")  # Debug log
         if odds_data:
             formatted_data = format_player_odds_for_ai(odds_data, sport)
             player_descriptions.extend(formatted_data)
             print(f"Formatted player data for {sport}: {formatted_data}")  # Debug log
-
     if not player_descriptions:
         print("No player-specific data found.")
         return {"best_player_bet": "Player prop bets are unavailable for this sport."}
-
     best_player_bet = generate_best_player_bet_with_ai(player_descriptions)
     if isinstance(best_player_bet, dict) and "error" in best_player_bet:
         print("Error generating player bet:", best_player_bet["error"])
         return {"best_player_bet": best_player_bet["error"]}
-    
     print("Generated player bet:", best_player_bet)
     return {"best_player_bet": best_player_bet}
 
