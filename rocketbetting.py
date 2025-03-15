@@ -8,7 +8,7 @@ import json
 import re  # For extracting JSON via regex
 import time
 
-# For scraping DraftKings (hybrid approach)
+# For scraping DraftKings
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
@@ -221,7 +221,7 @@ def generate_best_player_bet_with_ai(player_descriptions):
 
 def scrape_draftkings_player_props(sport):
     """Scrape player prop data from DraftKings for the given sport.
-       (This is a sample function—you will need to adjust it based on DraftKings’ current page structure and ensure you comply with their terms.)
+       (This sample code must be adjusted to match DraftKings’ current structure and comply with their terms.)
     """
     url = None
     if sport.upper() == "NBA":
@@ -233,21 +233,31 @@ def scrape_draftkings_player_props(sport):
     if not url:
         return []
     
-    # Set up Selenium in headless mode
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
-    # Ensure that the chromedriver is installed and in PATH.
-    driver = webdriver.Chrome(options=options)
-    driver.get(url)
-    time.sleep(5)  # wait for page to load; adjust if needed
+    options.add_argument("--no-sandbox")
+    try:
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(180)
+    except Exception as e:
+        print(f"Error initializing webdriver: {e}")
+        return []
+    
+    try:
+        driver.get(url)
+    except Exception as e:
+        print(f"Error loading URL {url}: {e}")
+        driver.quit()
+        return []
+    
+    time.sleep(10)  # Adjust wait time if needed
     html = driver.page_source
     driver.quit()
     
     soup = BeautifulSoup(html, "html.parser")
     player_props = []
-    # The selectors below are only examples; adjust them to match DraftKings’ page structure.
-    # For instance, assume each player prop is within a div with class "sportsbook-prop".
+    # Adjust these selectors based on DraftKings' current page structure.
     for div in soup.find_all("div", class_="sportsbook-prop"):
         try:
             name = div.find("span", class_="sportsbook-prop__player-name").get_text(strip=True)
@@ -255,6 +265,7 @@ def scrape_draftkings_player_props(sport):
             odds = div.find("span", class_="sportsbook-prop__odds").get_text(strip=True)
             player_props.append(f"{sport.upper()}: {name} - {prop_type} | Odds: {odds}")
         except Exception as e:
+            print(f"Error parsing a prop div: {e}")
             continue
     return player_props
 
@@ -353,7 +364,7 @@ def get_mls_best_parlay():
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
-    # First, attempt to get player prop data from the API
+    # First, attempt to get player prop data from the API endpoint with player prop markets.
     for sport, base_url in SPORTS_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions="us")
         print(f"Raw player data for {sport}: {odds_data}")
@@ -361,7 +372,7 @@ def get_player_best_bet():
             formatted_data = format_player_odds_for_ai(odds_data, sport)
             player_descriptions.extend(formatted_data)
             print(f"Formatted player data for {sport}: {formatted_data}")
-    # If no data was returned from the API, then try scraping from DraftKings
+    # If no player data is returned from the API, then try scraping DraftKings.
     if not player_descriptions:
         print("No player-specific data from API; attempting to scrape DraftKings.")
         for sport in SPORTS_BASE_URLS.keys():
@@ -378,41 +389,6 @@ def get_player_best_bet():
         return {"best_player_bet": best_player_bet["error"]}
     print("Generated player bet:", best_player_bet)
     return {"best_player_bet": best_player_bet}
-
-def scrape_draftkings_player_props(sport):
-    """Scrape player prop data from DraftKings for the given sport.
-       (This is sample code. You must adjust the URL and selectors based on DraftKings’ current structure and ensure compliance with their terms.)
-    """
-    url = None
-    if sport.upper() == "NBA":
-        url = "https://sportsbook.draftkings.com/play-lines/nba"
-    elif sport.upper() == "NFL":
-        url = "https://sportsbook.draftkings.com/play-lines/nfl"
-    elif sport.upper() == "MLS":
-        url = "https://sportsbook.draftkings.com/play-lines/mls"
-    if not url:
-        return []
-    
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    driver = webdriver.Chrome(options=options)
-    driver.get(url)
-    time.sleep(5)  # Wait for page to load; adjust as needed
-    html = driver.page_source
-    driver.quit()
-    soup = BeautifulSoup(html, "html.parser")
-    player_props = []
-    # Example selectors – adjust these based on the current DraftKings page
-    for div in soup.find_all("div", class_="sportsbook-prop"):
-        try:
-            name = div.find("span", class_="sportsbook-prop__player-name").get_text(strip=True)
-            prop_type = div.find("span", class_="sportsbook-prop__label").get_text(strip=True)
-            odds = div.find("span", class_="sportsbook-prop__odds").get_text(strip=True)
-            player_props.append(f"{sport.upper()}: {name} - {prop_type} | Odds: {odds}")
-        except Exception:
-            continue
-    return player_props
 
 @app.get("/")
 def read_root():
