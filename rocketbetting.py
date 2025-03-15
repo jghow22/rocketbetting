@@ -56,14 +56,17 @@ def extract_json(text):
 def fetch_odds(api_key, base_url, markets="h2h", regions="us"):
     params = {
         "apiKey": api_key,
-        "markets": markets,
         "oddsFormat": "decimal",
     }
+    if markets:
+        params["markets"] = markets
     if regions is not None:
         params["regions"] = regions
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
         return response.json()
+    else:
+        print(f"Request to {base_url} failed with status code {response.status_code} and response: {response.text}")
     return None
 
 def format_odds_for_ai(odds_data, sport):
@@ -89,7 +92,7 @@ def format_odds_for_ai(odds_data, sport):
 
 def format_player_odds_for_ai(odds_data, sport):
     player_descriptions = []
-    # Try to handle both cases: data might be a list directly
+    # Try to handle both cases: if odds_data is a list or a dict with player_props key.
     if isinstance(odds_data, list):
         for prop in odds_data:
             player_name = prop.get("name")
@@ -314,12 +317,17 @@ def get_mls_best_parlay():
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
-    # Use the player props endpoints without the regions parameter.
+    # Iterate over the player prop endpoints without regions.
     for sport, base_url in PLAYER_PROP_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions=None)
         print(f"Raw player data for {sport}: {odds_data}")  # Debug log
         if odds_data:
             formatted_data = format_player_odds_for_ai(odds_data, sport)
+            # If the first call returns no data, try again without the markets parameter.
+            if not formatted_data:
+                odds_data = fetch_odds(API_KEY, base_url, regions=None)
+                print(f"Retry raw player data for {sport}: {odds_data}")  # Debug log
+                formatted_data = format_player_odds_for_ai(odds_data, sport)
             player_descriptions.extend(formatted_data)
             print(f"Formatted player data for {sport}: {formatted_data}")  # Debug log
 
