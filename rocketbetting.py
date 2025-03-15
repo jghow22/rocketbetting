@@ -79,7 +79,7 @@ def format_odds_for_ai(odds_data, sport):
 def format_player_odds_for_ai(odds_data, sport):
     player_descriptions = []
     for game in odds_data:
-        # Adjusted to work with specific player prop markets
+        # Check for the player prop key in the returned data structure
         if "player_props" not in game:
             continue
         for player in game.get("player_props", []):
@@ -298,9 +298,9 @@ def get_mls_best_parlay():
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
-    # Updated markets parameter to request specific player prop markets
+    # Request specific player prop markets
     for sport, base_url in SPORTS_BASE_URLS.items():
-        odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds")
+        odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks")
         print(f"Raw player data for {sport}: {odds_data}")  # Debug log
         if odds_data:
             formatted_data = format_player_odds_for_ai(odds_data, sport)
