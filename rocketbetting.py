@@ -34,11 +34,11 @@ SPORTS_BASE_URLS = {
     "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
 }
 
-# Endpoints for player prop data
+# Updated endpoints for player prop data (added trailing slash)
 PLAYER_PROP_BASE_URLS = {
-    "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/playerprops",
-    "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/playerprops",
-    "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/playerprops",
+    "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/playerprops/",
+    "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/playerprops/",
+    "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/playerprops/",
 }
 
 openai.api_key = OPENAI_API_KEY
@@ -317,13 +317,12 @@ def get_mls_best_parlay():
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
-    # Iterate over the player prop endpoints without regions.
+    # Iterate over the player prop endpoints without the regions parameter.
     for sport, base_url in PLAYER_PROP_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions=None)
         print(f"Raw player data for {sport}: {odds_data}")  # Debug log
         if odds_data:
             formatted_data = format_player_odds_for_ai(odds_data, sport)
-            # If the first call returns no data, try again without the markets parameter.
             if not formatted_data:
                 odds_data = fetch_odds(API_KEY, base_url, regions=None)
                 print(f"Retry raw player data for {sport}: {odds_data}")  # Debug log
