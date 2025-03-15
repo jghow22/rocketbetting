@@ -13,29 +13,29 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins, or specify your Wix domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Debugging: Print API keys (masked for security)
+# Print API keys (masked)
 print(f"Using OpenAI API key: {os.getenv('OPENAI_API_KEY')[:5]}*****")
 print(f"Using Odds API key: {os.getenv('ODDS_API_KEY')[:5]}*****")
 
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SPORTS_BASE_URLS = {
-    "NBA": 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds',
-    "NFL": 'https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds',
-    "MLS": 'https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds',
+    "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
+    "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds",
+    "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
 }
 
 openai.api_key = OPENAI_API_KEY
 
 def extract_json(text):
-    """Attempt to extract a JSON object from the text using regex."""
-    match = re.search(r'(\{.*\})', text, re.DOTALL)
+    """Extract a JSON object from text using regex."""
+    match = re.search(r"(\{.*\})", text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(1))
@@ -43,20 +43,18 @@ def extract_json(text):
             return None
     return None
 
-# Function to fetch odds
 def fetch_odds(api_key, base_url, markets="h2h"):
     params = {
-        'apiKey': api_key,
-        'regions': 'us',
-        'markets': markets,
-        'oddsFormat': 'decimal',
+        "apiKey": api_key,
+        "regions": "us",
+        "markets": markets,
+        "oddsFormat": "decimal",
     }
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
         return response.json()
     return None
 
-# Function to format game odds for AI
 def format_odds_for_ai(odds_data, sport):
     game_descriptions = []
     for game in odds_data:
@@ -78,7 +76,6 @@ def format_odds_for_ai(odds_data, sport):
                             )
     return game_descriptions
 
-# Function to format player props for AI
 def format_player_odds_for_ai(odds_data, sport):
     player_descriptions = []
     for game in odds_data:
@@ -92,14 +89,12 @@ def format_player_odds_for_ai(odds_data, sport):
                 player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
     return player_descriptions
 
-def get_sport_hint(game_descriptions):
-    """Extract a sport hint from the first game description if available."""
-    for desc in game_descriptions:
+def get_sport_hint(descriptions):
+    """Extract a sport hint from the first description if available."""
+    for desc in descriptions:
         if ":" in desc:
             return desc.split(":", 1)[0].strip()
     return ""
-
-# Updated functions to generate recommendations with OpenAI
 
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
@@ -114,17 +109,19 @@ def generate_best_pick_with_ai(game_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(game_descriptions)
+    print("Straight bet prompt:", prompt)  # Debug
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             temperature=0,
-            max_tokens=150,
+            max_tokens=300,
             messages=[
                 {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
-        rec_text = response['choices'][0]['message']['content'].strip()
+        rec_text = response["choices"][0]["message"]["content"].strip()
+        print("Straight bet raw response:", rec_text)  # Debug
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -148,17 +145,19 @@ def generate_best_parlay_with_ai(game_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(game_descriptions)
+    print("Parlay prompt:", prompt)  # Debug
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             temperature=0,
-            max_tokens=150,
+            max_tokens=300,
             messages=[
                 {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
-        rec_text = response['choices'][0]['message']['content'].strip()
+        rec_text = response["choices"][0]["message"]["content"].strip()
+        print("Parlay raw response:", rec_text)  # Debug
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -182,17 +181,19 @@ def generate_best_player_bet_with_ai(player_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(player_descriptions)
+    print("Player bet prompt:", prompt)  # Debug
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             temperature=0,
-            max_tokens=150,
+            max_tokens=300,
             messages=[
                 {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
-        rec_text = response['choices'][0]['message']['content'].strip()
+        rec_text = response["choices"][0]["message"]["content"].strip()
+        print("Player bet raw response:", rec_text)  # Debug
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -203,7 +204,6 @@ def generate_best_player_bet_with_ai(player_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate player bet recommendation: {e}"}
 
-# Updated schedule endpoint: supports an optional 'sport' query parameter
 @app.get("/games")
 def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, MLS)")):
     if sport:
@@ -228,7 +228,6 @@ def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, 
                 all_games.extend(odds_data)
         return all_games if all_games else {"error": "No games found."}
 
-# Overall endpoints for bets
 @app.get("/best-pick")
 def get_best_pick():
     game_descriptions = []
@@ -247,7 +246,6 @@ def get_best_parlay():
             game_descriptions.extend(format_odds_for_ai(odds_data, sport))
     return {"best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# NBA Endpoints
 @app.get("/nba-best-pick")
 def get_nba_best_pick():
     nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
@@ -264,7 +262,6 @@ def get_nba_best_parlay():
     game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
     return {"nba_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# NFL Endpoints
 @app.get("/nfl-best-pick")
 def get_nfl_best_pick():
     nfl_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NFL"])
@@ -281,7 +278,6 @@ def get_nfl_best_parlay():
     game_descriptions = format_odds_for_ai(nfl_odds_data, "NFL")
     return {"nfl_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# MLS Endpoints
 @app.get("/mls-best-pick")
 def get_mls_best_pick():
     mls_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLS"])
@@ -298,7 +294,6 @@ def get_mls_best_parlay():
     game_descriptions = format_odds_for_ai(mls_odds_data, "MLS")
     return {"mls_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Endpoint for player-specific bet (across all sports)
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
