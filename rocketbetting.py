@@ -11,6 +11,7 @@ import time
 # For scraping DraftKings
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 
 # Initialize FastAPI app
@@ -91,7 +92,6 @@ def format_odds_for_ai(odds_data, sport):
 
 def format_player_odds_for_ai(odds_data, sport):
     player_descriptions = []
-    # Try to parse player prop data from the API response (if available)
     for game in odds_data:
         if "player_props" in game:
             for prop in game["player_props"]:
@@ -103,7 +103,6 @@ def format_player_odds_for_ai(odds_data, sport):
     return player_descriptions
 
 def get_sport_hint(descriptions):
-    """Extract a sport hint from the first description if available."""
     for desc in descriptions:
         if ":" in desc:
             return desc.split(":", 1)[0].strip()
@@ -122,7 +121,7 @@ def generate_best_pick_with_ai(game_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(game_descriptions)
-    print("Straight bet prompt:", prompt)  # Debug
+    print("Straight bet prompt:", prompt)
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -134,7 +133,7 @@ def generate_best_pick_with_ai(game_descriptions):
             ]
         )
         rec_text = response["choices"][0]["message"]["content"].strip()
-        print("Straight bet raw response:", rec_text)  # Debug
+        print("Straight bet raw response:", rec_text)
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -158,7 +157,7 @@ def generate_best_parlay_with_ai(game_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(game_descriptions)
-    print("Parlay prompt:", prompt)  # Debug
+    print("Parlay prompt:", prompt)
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -170,7 +169,7 @@ def generate_best_parlay_with_ai(game_descriptions):
             ]
         )
         rec_text = response["choices"][0]["message"]["content"].strip()
-        print("Parlay raw response:", rec_text)  # Debug
+        print("Parlay raw response:", rec_text)
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -194,7 +193,7 @@ def generate_best_player_bet_with_ai(player_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(player_descriptions)
-    print("Player bet prompt:", prompt)  # Debug
+    print("Player bet prompt:", prompt)
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -206,7 +205,7 @@ def generate_best_player_bet_with_ai(player_descriptions):
             ]
         )
         rec_text = response["choices"][0]["message"]["content"].strip()
-        print("Player bet raw response:", rec_text)  # Debug
+        print("Player bet raw response:", rec_text)
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -221,7 +220,8 @@ def generate_best_player_bet_with_ai(player_descriptions):
 
 def scrape_draftkings_player_props(sport):
     """Scrape player prop data from DraftKings for the given sport.
-       (This sample code must be adjusted to match DraftKings’ current structure and comply with their terms.)
+       Adjust the URL and selectors based on DraftKings’ current structure.
+       Ensure compliance with their terms.
     """
     url = None
     if sport.upper() == "NBA":
@@ -239,13 +239,18 @@ def scrape_draftkings_player_props(sport):
     options.add_argument("--no-sandbox")
     try:
         driver = webdriver.Chrome(options=options)
-        driver.set_page_load_timeout(180)
+        driver.set_page_load_timeout(60)  # Reduced timeout
+        driver.implicitly_wait(10)  # Wait up to 10 seconds for elements
     except Exception as e:
         print(f"Error initializing webdriver: {e}")
         return []
     
     try:
         driver.get(url)
+    except TimeoutException as te:
+        print(f"Timeout loading URL {url}: {te}")
+        driver.quit()
+        return []
     except Exception as e:
         print(f"Error loading URL {url}: {e}")
         driver.quit()
@@ -257,7 +262,7 @@ def scrape_draftkings_player_props(sport):
     
     soup = BeautifulSoup(html, "html.parser")
     player_props = []
-    # Adjust these selectors based on DraftKings' current page structure.
+    # Example selectors – adjust these to match DraftKings’ current structure.
     for div in soup.find_all("div", class_="sportsbook-prop"):
         try:
             name = div.find("span", class_="sportsbook-prop__player-name").get_text(strip=True)
@@ -372,7 +377,7 @@ def get_player_best_bet():
             formatted_data = format_player_odds_for_ai(odds_data, sport)
             player_descriptions.extend(formatted_data)
             print(f"Formatted player data for {sport}: {formatted_data}")
-    # If no player data is returned from the API, then try scraping DraftKings.
+    # If no player prop data is returned from the API, attempt to scrape DraftKings.
     if not player_descriptions:
         print("No player-specific data from API; attempting to scrape DraftKings.")
         for sport in SPORTS_BASE_URLS.keys():
