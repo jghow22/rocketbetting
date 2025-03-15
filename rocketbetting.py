@@ -23,12 +23,22 @@ app.add_middleware(
 print(f"Using OpenAI API key: {os.getenv('OPENAI_API_KEY')[:5]}*****")
 print(f"Using Odds API key: {os.getenv('ODDS_API_KEY')[:5]}*****")
 
+# The odds API key is retrieved from the environment variable.
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Endpoints for standard game odds
 SPORTS_BASE_URLS = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
     "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds",
     "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
+}
+
+# New endpoints for player prop data
+PLAYER_PROP_BASE_URLS = {
+    "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/playerprops",
+    "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/playerprops",
+    "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/playerprops",
 }
 
 openai.api_key = OPENAI_API_KEY
@@ -78,14 +88,20 @@ def format_odds_for_ai(odds_data, sport):
 
 def format_player_odds_for_ai(odds_data, sport):
     player_descriptions = []
-    for game in odds_data:
-        # Check for the player prop key in the returned data structure
-        if "player_props" not in game:
-            continue
-        for player in game.get("player_props", []):
-            player_name = player.get("name")
-            bet_type = player.get("type")
-            odds = player.get("price")
+    # Assume the new player props endpoint returns data with a key "player_props" similar to before.
+    if "player_props" not in odds_data:
+        # If the structure is a list of prop objects instead, iterate directly.
+        for prop in odds_data:
+            player_name = prop.get("name")
+            bet_type = prop.get("type")
+            odds = prop.get("price")
+            if player_name and bet_type and odds:
+                player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
+    else:
+        for game in odds_data.get("player_props", []):
+            player_name = game.get("name")
+            bet_type = game.get("type")
+            odds = game.get("price")
             if player_name and bet_type and odds:
                 player_descriptions.append(f"{sport}: {player_name} - {bet_type} | Odds: {odds}")
     return player_descriptions
@@ -298,8 +314,8 @@ def get_mls_best_parlay():
 @app.get("/player-best-bet")
 def get_player_best_bet():
     player_descriptions = []
-    # Request specific player prop markets
-    for sport, base_url in SPORTS_BASE_URLS.items():
+    # Iterate over the PLAYER_PROP_BASE_URLS instead of the standard odds URLs.
+    for sport, base_url in PLAYER_PROP_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks")
         print(f"Raw player data for {sport}: {odds_data}")  # Debug log
         if odds_data:
