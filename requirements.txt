@@ -4,3 +4,4 @@ requests==2.31.0
 openai==0.28.0
 selenium>=4.0.0
 beautifulsoup4>=4.9.3
+requests-html>=0.10.0
