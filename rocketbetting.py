@@ -1,10 +1,10 @@
 import os
-# Force uvicorn to use asyncio instead of uvloop by setting the environment variable
+# Force uvicorn to use the standard asyncio loop instead of uvloop
 os.environ["UVICORN_LOOP"] = "asyncio"
 
 import asyncio
-# Check if the current loop is a uvloop; if not, apply nest_asyncio
 try:
+    # If a loop is already running and is not uvloop, we can apply nest_asyncio.
     loop = asyncio.get_running_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
@@ -257,12 +257,39 @@ async def scrape_draftkings_player_props(sport: str):
     
     soup = BeautifulSoup(html, "html.parser")
     player_props = []
-    # Adjust these selectors based on DraftKings’ current page structure.
-    for div in soup.find_all("div", class_="sportsbook-prop"):
+    
+    # Try using new selectors based on data-testid attributes (update these as needed)
+    prop_divs = soup.find_all("div", attrs={"data-testid": "prop-market"})
+    if not prop_divs:
+        # Fallback to previous class-based selectors
+        prop_divs = soup.find_all("div", class_="sportsbook-prop")
+    
+    for div in prop_divs:
         try:
-            name = div.find("span", class_="sportsbook-prop__player-name").get_text(strip=True)
-            prop_type = div.find("span", class_="sportsbook-prop__label").get_text(strip=True)
-            odds = div.find("span", class_="sportsbook-prop__odds").get_text(strip=True)
+            # Try new selectors first
+            name_el = div.find("span", attrs={"data-testid": "player-name"})
+            if name_el:
+                name = name_el.get_text(strip=True)
+            else:
+                name_el = div.find("span", class_="sportsbook-prop__player-name")
+                if not name_el:
+                    continue
+                name = name_el.get_text(strip=True)
+            
+            label_el = div.find("span", attrs={"data-testid": "prop-label"})
+            if label_el:
+                prop_type = label_el.get_text(strip=True)
+            else:
+                label_el = div.find("span", class_="sportsbook-prop__label")
+                prop_type = label_el.get_text(strip=True) if label_el else "N/A"
+            
+            odds_el = div.find("span", attrs={"data-testid": "prop-odds"})
+            if odds_el:
+                odds = odds_el.get_text(strip=True)
+            else:
+                odds_el = div.find("span", class_="sportsbook-prop__odds")
+                odds = odds_el.get_text(strip=True) if odds_el else "N/A"
+            
             player_props.append(f"{sport.upper()}: {name} - {prop_type} | Odds: {odds}")
         except Exception as e:
             print(f"Error parsing a prop div for {sport}: {e}")
