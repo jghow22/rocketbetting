@@ -1,3 +1,6 @@
+import nest_asyncio
+nest_asyncio.apply()
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -254,8 +257,6 @@ async def scrape_draftkings_player_props(sport: str):
             print(f"Error parsing a prop div for {sport}: {e}")
             continue
     return player_props
-
-# --- End of scraping function ---
 
 @app.get("/games")
 def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, MLS)")):
