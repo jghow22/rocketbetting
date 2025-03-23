@@ -8,9 +8,10 @@ import json
 import re  # For extracting JSON via regex
 import time
 
-# For scraping using requests_html
-from requests_html import HTMLSession
+# For asynchronous scraping using requests_html
+from requests_html import AsyncHTMLSession
 from bs4 import BeautifulSoup
+import asyncio
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -102,7 +103,6 @@ def format_player_odds_for_ai(odds_data, sport):
     return player_descriptions
 
 def get_sport_hint(descriptions):
-    """Extract a sport hint from the first description if available."""
     for desc in descriptions:
         if ":" in desc:
             return desc.split(":", 1)[0].strip()
@@ -121,7 +121,7 @@ def generate_best_pick_with_ai(game_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(game_descriptions)
-    print("Straight bet prompt:", prompt)  # Debug
+    print("Straight bet prompt:", prompt)
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -133,7 +133,7 @@ def generate_best_pick_with_ai(game_descriptions):
             ]
         )
         rec_text = response["choices"][0]["message"]["content"].strip()
-        print("Straight bet raw response:", rec_text)  # Debug
+        print("Straight bet raw response:", rec_text)
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -157,7 +157,7 @@ def generate_best_parlay_with_ai(game_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(game_descriptions)
-    print("Parlay prompt:", prompt)  # Debug
+    print("Parlay prompt:", prompt)
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -169,7 +169,7 @@ def generate_best_parlay_with_ai(game_descriptions):
             ]
         )
         rec_text = response["choices"][0]["message"]["content"].strip()
-        print("Parlay raw response:", rec_text)  # Debug
+        print("Parlay raw response:", rec_text)
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -193,7 +193,7 @@ def generate_best_player_bet_with_ai(player_descriptions):
         + sport_line + "\n"
     )
     prompt += "\n".join(player_descriptions)
-    print("Player bet prompt:", prompt)  # Debug
+    print("Player bet prompt:", prompt)
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -205,7 +205,7 @@ def generate_best_player_bet_with_ai(player_descriptions):
             ]
         )
         rec_text = response["choices"][0]["message"]["content"].strip()
-        print("Player bet raw response:", rec_text)  # Debug
+        print("Player bet raw response:", rec_text)
         try:
             rec_json = json.loads(rec_text)
         except Exception as e:
@@ -216,8 +216,8 @@ def generate_best_player_bet_with_ai(player_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate player bet recommendation: {e}"}
 
-# --- Hybrid scraping for player props from DraftKings using requests_html ---
-def scrape_draftkings_player_props(sport):
+# --- Asynchronous scraping for player props from DraftKings using requests_html ---
+async def scrape_draftkings_player_props(sport: str):
     """Scrape player prop data from DraftKings for the given sport.
        Adjust the URL and selectors based on DraftKings’ current structure.
        Ensure compliance with DraftKings' terms of service.
@@ -232,11 +232,10 @@ def scrape_draftkings_player_props(sport):
     if not url:
         return []
     
-    session = HTMLSession()
+    session = AsyncHTMLSession()
     try:
-        r = session.get(url)
-        # Render the page (wait for JavaScript to load)
-        r.html.render(timeout=30)
+        r = await session.get(url)
+        await r.html.arender(timeout=60)
         html = r.html.html
     except Exception as e:
         print(f"Error scraping DraftKings for {sport}: {e}")
@@ -244,7 +243,7 @@ def scrape_draftkings_player_props(sport):
     
     soup = BeautifulSoup(html, "html.parser")
     player_props = []
-    # Example selectors – adjust based on DraftKings’ current page structure
+    # Adjust these selectors based on DraftKings’ current page structure.
     for div in soup.find_all("div", class_="sportsbook-prop"):
         try:
             name = div.find("span", class_="sportsbook-prop__player-name").get_text(strip=True)
@@ -349,7 +348,7 @@ def get_mls_best_parlay():
     return {"mls_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
 @app.get("/player-best-bet")
-def get_player_best_bet():
+async def get_player_best_bet():
     player_descriptions = []
     # First, attempt to get player prop data from the API endpoint with player prop markets.
     for sport, base_url in SPORTS_BASE_URLS.items():
@@ -359,11 +358,11 @@ def get_player_best_bet():
             formatted_data = format_player_odds_for_ai(odds_data, sport)
             player_descriptions.extend(formatted_data)
             print(f"Formatted player data for {sport}: {formatted_data}")
-    # If no data is returned from the API, try scraping DraftKings.
+    # If no player data is returned from the API, then try scraping DraftKings.
     if not player_descriptions:
         print("No player-specific data from API; attempting to scrape DraftKings.")
         for sport in SPORTS_BASE_URLS.keys():
-            scraped_data = scrape_draftkings_player_props(sport)
+            scraped_data = await scrape_draftkings_player_props(sport)
             if scraped_data:
                 player_descriptions.extend(scraped_data)
                 print(f"Scraped player data for {sport}: {scraped_data}")
