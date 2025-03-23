@@ -1,9 +1,18 @@
 import os
-# Force uvicorn to use asyncio instead of uvloop
+# Force uvicorn to use asyncio instead of uvloop by setting the environment variable
 os.environ["UVICORN_LOOP"] = "asyncio"
 
-import nest_asyncio
-nest_asyncio.apply()
+import asyncio
+# Check if the current loop is a uvloop; if not, apply nest_asyncio
+try:
+    loop = asyncio.get_running_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+if loop.__class__.__module__.startswith("uvloop"):
+    print("Detected uvloop; skipping nest_asyncio.apply()")
+else:
+    import nest_asyncio
+    nest_asyncio.apply()
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +22,6 @@ import openai
 import json
 import re  # For extracting JSON via regex
 import time
-import asyncio
 
 # For asynchronous scraping using requests_html
 from requests_html import AsyncHTMLSession
