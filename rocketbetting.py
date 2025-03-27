@@ -4,7 +4,6 @@ os.environ["UVICORN_LOOP"] = "asyncio"
 
 import asyncio
 try:
-    # If a loop is already running and is not uvloop, we can apply nest_asyncio.
     loop = asyncio.get_running_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
@@ -42,10 +41,12 @@ app.add_middleware(
 # Print API keys (masked)
 print(f"Using OpenAI API key: {os.getenv('OPENAI_API_KEY')[:5]}*****")
 print(f"Using Odds API key: {os.getenv('ODDS_API_KEY')[:5]}*****")
+print(f"Using TheSportsDB API key: {os.getenv('THESPORTSDB_API_KEY')[:5]}*****")
 
 # Retrieve API keys from environment
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+THESPORTSDB_API_KEY = os.getenv("THESPORTSDB_API_KEY")
 
 # Endpoints for standard game odds
 SPORTS_BASE_URLS = {
@@ -105,7 +106,6 @@ def format_odds_for_ai(odds_data, sport):
 
 def format_player_odds_for_ai(odds_data, sport):
     player_descriptions = []
-    # Parse player prop data from the API response (if available)
     for game in odds_data:
         if "player_props" in game:
             for prop in game["player_props"]:
@@ -230,71 +230,22 @@ def generate_best_player_bet_with_ai(player_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate player bet recommendation: {e}"}
 
-# --- Asynchronous scraping for player props from DraftKings using requests_html ---
-async def scrape_draftkings_player_props(sport: str):
-    """Scrape player prop data from DraftKings for the given sport.
-       Adjust the URL and selectors based on DraftKings’ current structure.
-       Ensure compliance with DraftKings' terms of service.
+# --- New: Fetch player data from TheSportsDB ---
+def fetch_player_data_thesportsdb(api_key, sport):
     """
-    url = None
-    if sport.upper() == "NBA":
-        url = "https://sportsbook.draftkings.com/play-lines/nba"
-    elif sport.upper() == "NFL":
-        url = "https://sportsbook.draftkings.com/play-lines/nfl"
-    elif sport.upper() == "MLS":
-        url = "https://sportsbook.draftkings.com/play-lines/mls"
-    if not url:
-        return []
-    
-    session = AsyncHTMLSession()
-    try:
-        r = await session.get(url)
-        await r.html.arender(timeout=60)
-        html = r.html.html
-    except Exception as e:
-        print(f"Error scraping DraftKings for {sport}: {e}")
-        return []
-    
-    soup = BeautifulSoup(html, "html.parser")
-    player_props = []
-    
-    # Try using new selectors based on data-testid attributes (update these as needed)
-    prop_divs = soup.find_all("div", attrs={"data-testid": "prop-market"})
-    if not prop_divs:
-        # Fallback to previous class-based selectors
-        prop_divs = soup.find_all("div", class_="sportsbook-prop")
-    
-    for div in prop_divs:
-        try:
-            # Try new selectors first
-            name_el = div.find("span", attrs={"data-testid": "player-name"})
-            if name_el:
-                name = name_el.get_text(strip=True)
-            else:
-                name_el = div.find("span", class_="sportsbook-prop__player-name")
-                if not name_el:
-                    continue
-                name = name_el.get_text(strip=True)
-            
-            label_el = div.find("span", attrs={"data-testid": "prop-label"})
-            if label_el:
-                prop_type = label_el.get_text(strip=True)
-            else:
-                label_el = div.find("span", class_="sportsbook-prop__label")
-                prop_type = label_el.get_text(strip=True) if label_el else "N/A"
-            
-            odds_el = div.find("span", attrs={"data-testid": "prop-odds"})
-            if odds_el:
-                odds = odds_el.get_text(strip=True)
-            else:
-                odds_el = div.find("span", class_="sportsbook-prop__odds")
-                odds = odds_el.get_text(strip=True) if odds_el else "N/A"
-            
-            player_props.append(f"{sport.upper()}: {name} - {prop_type} | Odds: {odds}")
-        except Exception as e:
-            print(f"Error parsing a prop div for {sport}: {e}")
-            continue
-    return player_props
+    Fetch player data from TheSportsDB for the given sport.
+    For demonstration, this function searches for players with the letter 'a'.
+    You may adjust this query or use lookup endpoints with specific team IDs.
+    """
+    base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
+    params = {"p": "a"}
+    response = requests.get(base_url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        return data.get("player", [])
+    else:
+        print(f"TheSportsDB request failed: {response.status_code}, {response.text}")
+    return []
 
 @app.get("/games")
 def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, MLS)")):
@@ -389,15 +340,28 @@ def get_mls_best_parlay():
 @app.get("/player-best-bet")
 async def get_player_best_bet():
     player_descriptions = []
-    # First, attempt to get player prop data from the API endpoint with player prop markets.
-    for sport, base_url in SPORTS_BASE_URLS.items():
-        odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions="us")
-        print(f"Raw player data for {sport}: {odds_data}")
-        if odds_data:
-            formatted_data = format_player_odds_for_ai(odds_data, sport)
-            player_descriptions.extend(formatted_data)
-            print(f"Formatted player data for {sport}: {formatted_data}")
-    # If no player data is returned from the API, then try scraping DraftKings.
+    # First, attempt to get player data from TheSportsDB
+    thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, "NBA")
+    if thesportsdb_data:
+        # Format the data; here we pick the "Points" stat as an example (adjust as needed)
+        for player in thesportsdb_data:
+            name = player.get("strPlayer")
+            points = player.get("strPosition")  # Replace with the appropriate field if available
+            if name and points:
+                desc = f"NBA: {name} - Position: {points}"
+                player_descriptions.append(desc)
+        print(f"Fetched TheSportsDB player data: {player_descriptions}")
+
+    # If no data from TheSportsDB, try your previous API for player props
+    if not player_descriptions:
+        for sport, base_url in SPORTS_BASE_URLS.items():
+            odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions="us")
+            print(f"Raw player data for {sport}: {odds_data}")
+            if odds_data:
+                formatted_data = format_player_odds_for_ai(odds_data, sport)
+                player_descriptions.extend(formatted_data)
+                print(f"Formatted player data for {sport}: {formatted_data}")
+    # If still no player data, fall back to scraping DraftKings.
     if not player_descriptions:
         print("No player-specific data from API; attempting to scrape DraftKings.")
         for sport in SPORTS_BASE_URLS.keys():
