@@ -55,6 +55,7 @@ SPORTS_BASE_URLS = {
     "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
 }
 
+# IMPORTANT: Pin openai==0.28 in your requirements.txt for now.
 openai.api_key = OPENAI_API_KEY
 
 def extract_json(text):
@@ -234,8 +235,8 @@ def generate_best_player_bet_with_ai(player_descriptions):
 def fetch_player_data_thesportsdb(api_key, sport):
     """
     Fetch player data from TheSportsDB for the given sport.
-    For demonstration, this function searches for players with the letter 'a'.
-    You may adjust this query or use lookup endpoints with specific team IDs.
+    For this example, we use the searchplayers endpoint with query 'a'.
+    You may adjust this to target specific teams or leagues.
     """
     base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
     params = {"p": "a"}
@@ -343,16 +344,16 @@ async def get_player_best_bet():
     # First, attempt to get player data from TheSportsDB
     thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, "NBA")
     if thesportsdb_data:
-        # Format the data; here we pick the "Points" stat as an example (adjust as needed)
         for player in thesportsdb_data:
             name = player.get("strPlayer")
-            points = player.get("strPosition")  # Replace with the appropriate field if available
-            if name and points:
-                desc = f"NBA: {name} - Position: {points}"
+            # Using the player's position as a placeholder for the prop detail
+            position = player.get("strPosition")
+            if name and position:
+                desc = f"NBA: {name} - Position: {position}"
                 player_descriptions.append(desc)
         print(f"Fetched TheSportsDB player data: {player_descriptions}")
 
-    # If no data from TheSportsDB, try your previous API for player props
+    # If no data from TheSportsDB, try the Odds API (if it supports player props)
     if not player_descriptions:
         for sport, base_url in SPORTS_BASE_URLS.items():
             odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions="us")
@@ -361,7 +362,7 @@ async def get_player_best_bet():
                 formatted_data = format_player_odds_for_ai(odds_data, sport)
                 player_descriptions.extend(formatted_data)
                 print(f"Formatted player data for {sport}: {formatted_data}")
-    # If still no player data, fall back to scraping DraftKings.
+    # If still no player data, fall back to scraping DraftKings (if implemented)
     if not player_descriptions:
         print("No player-specific data from API; attempting to scrape DraftKings.")
         for sport in SPORTS_BASE_URLS.keys():
