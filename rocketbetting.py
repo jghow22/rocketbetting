@@ -20,7 +20,6 @@ import requests
 import openai
 import json
 import re  # For extracting JSON via regex
-import time
 
 # For asynchronous scraping using requests_html (if needed)
 from requests_html import AsyncHTMLSession
@@ -235,12 +234,11 @@ def generate_best_player_bet_with_ai(player_descriptions):
 def fetch_player_data_thesportsdb(api_key, sport):
     """
     Fetch player data from TheSportsDB.
-    For NBA, use the 'search_all_players.php' endpoint with the full league name.
-    For other sports, no free data is available.
+    For NBA, use the 'lookup_all_players.php' endpoint with the full league name.
+    (Note: If the free endpoint returns no data, this function may return an empty list.)
     """
     if sport == "NBA":
-        base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/search_all_players.php"
-        # Note: The free endpoint for NBA requires the full league name.
+        base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/lookup_all_players.php"
         params = {"l": "National Basketball Association"}
         response = requests.get(base_url, params=params)
         if response.status_code == 200:
@@ -391,6 +389,17 @@ async def get_player_best_bet(sport: str = Query("NBA", description="Sport code 
         print(f"Fetched TheSportsDB player data: {player_descriptions}")
     else:
         print("No player data from TheSportsDB.")
+    
+    # For NBA, if no data is returned, use fallback sample data.
+    if sport == "NBA" and not player_descriptions:
+        player_descriptions = [
+            "NBA: LeBron James - Position: Forward",
+            "NBA: Stephen Curry - Position: Guard",
+            "NBA: Kevin Durant - Position: Forward",
+            "NBA: Giannis Antetokounmpo - Position: Forward",
+            "NBA: James Harden - Position: Guard"
+        ]
+        print("Using fallback NBA player data:", player_descriptions)
     
     if not player_descriptions:
         print(f"No player-specific data available for {sport}.")
