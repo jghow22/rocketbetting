@@ -22,7 +22,7 @@ import json
 import re  # For extracting JSON via regex
 import time
 
-# For asynchronous scraping using requests_html
+# For asynchronous scraping using requests_html (if needed)
 from requests_html import AsyncHTMLSession
 from bs4 import BeautifulSoup
 
@@ -48,7 +48,7 @@ API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THESPORTSDB_API_KEY = os.getenv("THESPORTSDB_API_KEY")
 
-# Endpoints for standard game odds
+# Endpoints for game odds
 SPORTS_BASE_URLS = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
     "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds",
@@ -231,24 +231,18 @@ def generate_best_player_bet_with_ai(player_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate player bet recommendation: {e}"}
 
-# --- New: Fetch player data from TheSportsDB ---
+# --- Fetch player data from TheSportsDB ---
 def fetch_player_data_thesportsdb(api_key, sport):
     """
     Fetch player data from TheSportsDB for the given sport.
-    Note: The free searchplayers.php endpoint returns data primarily for NBA.
-    For demonstration, we change the query based on sport.
+    Note: The free searchplayers.php endpoint primarily returns NBA players.
+    For NFL or MLS, we currently return an empty list.
     """
+    if sport != "NBA":
+        print(f"No free player data available for {sport} from TheSportsDB.")
+        return []
     base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
-    # Use different query strings per sport (adjust these as needed)
-    if sport == "NBA":
-        query = "a"  # This tends to return NBA players
-    elif sport == "NFL":
-        query = "NFL"  # Change or use a different endpoint for NFL if available
-    elif sport == "MLS":
-        query = "MLS"  # Change or use a different endpoint for MLS if available
-    else:
-        query = "a"
-    params = {"p": query}
+    params = {"p": "a"}
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
         data = response.json()
@@ -349,7 +343,8 @@ def get_mls_best_parlay():
     game_descriptions = format_odds_for_ai(mls_odds_data, "MLS")
     return {"mls_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# --- New endpoints for sport-specific recommendations using a query parameter ---
+# --- Sport-specific endpoints using query parameters ---
+
 @app.get("/sport-best-pick")
 def get_sport_best_pick(sport: str = Query(..., description="Sport code (e.g., NBA, NFL, MLS)")):
     sport = sport.upper()
@@ -383,7 +378,7 @@ async def get_player_best_bet(sport: str = Query("NBA", description="Sport code 
     thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport)
     if thesportsdb_data:
         for player in thesportsdb_data:
-            # If the player object has a "strSport" field, filter by it.
+            # If the player object includes "strSport", filter by the selected sport.
             if "strSport" in player and player["strSport"].upper() != sport:
                 continue
             name = player.get("strPlayer")
@@ -392,12 +387,12 @@ async def get_player_best_bet(sport: str = Query("NBA", description="Sport code 
                 desc = f"{sport}: {name} - Position: {position}"
                 player_descriptions.append(desc)
         print(f"Fetched TheSportsDB player data: {player_descriptions}")
-
-    # (Optional) If no data from TheSportsDB, you could add additional sources here.
-
+    else:
+        print("No player data from TheSportsDB.")
+    
     if not player_descriptions:
-        print("No player-specific data found.")
-        return {"best_player_bet": "Player prop bets are unavailable for this sport."}
+        print(f"No player-specific data available for {sport}.")
+        return {"best_player_bet": f"Player prop bets are unavailable for {sport}."}
     best_player_bet = generate_best_player_bet_with_ai(player_descriptions)
     if isinstance(best_player_bet, dict) and "error" in best_player_bet:
         print("Error generating player bet:", best_player_bet["error"])
