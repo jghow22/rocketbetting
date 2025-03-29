@@ -235,11 +235,20 @@ def generate_best_player_bet_with_ai(player_descriptions):
 def fetch_player_data_thesportsdb(api_key, sport):
     """
     Fetch player data from TheSportsDB for the given sport.
-    For this example, we use the searchplayers endpoint with query 'a'.
-    The returned player objects include a 'strSport' field, which we can use for filtering.
+    Note: The free searchplayers.php endpoint returns data primarily for NBA.
+    For demonstration, we change the query based on sport.
     """
     base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
-    params = {"p": "a"}
+    # Use different query strings per sport (adjust these as needed)
+    if sport == "NBA":
+        query = "a"  # This tends to return NBA players
+    elif sport == "NFL":
+        query = "NFL"  # Change or use a different endpoint for NFL if available
+    elif sport == "MLS":
+        query = "MLS"  # Change or use a different endpoint for MLS if available
+    else:
+        query = "a"
+    params = {"p": query}
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
         data = response.json()
@@ -370,11 +379,11 @@ def get_sport_best_parlay(sport: str = Query(..., description="Sport code (e.g.,
 async def get_player_best_bet(sport: str = Query("NBA", description="Sport code (e.g., NBA, NFL, MLS)")):
     sport = sport.upper()
     player_descriptions = []
-    # First, attempt to get player data from TheSportsDB for the selected sport
+    # Attempt to get player data from TheSportsDB for the selected sport.
     thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport)
     if thesportsdb_data:
         for player in thesportsdb_data:
-            # Filter players based on the sport field if available
+            # If the player object has a "strSport" field, filter by it.
             if "strSport" in player and player["strSport"].upper() != sport:
                 continue
             name = player.get("strPlayer")
@@ -384,23 +393,8 @@ async def get_player_best_bet(sport: str = Query("NBA", description="Sport code 
                 player_descriptions.append(desc)
         print(f"Fetched TheSportsDB player data: {player_descriptions}")
 
-    # If no data from TheSportsDB, try the Odds API (if it supports player props)
-    if not player_descriptions:
-        for sport_key, base_url in SPORTS_BASE_URLS.items():
-            odds_data = fetch_odds(API_KEY, base_url, markets="player_points,player_assists,player_rebounds,player_steals,player_blocks", regions="us")
-            print(f"Raw player data for {sport_key}: {odds_data}")
-            if odds_data:
-                formatted_data = format_player_odds_for_ai(odds_data, sport_key)
-                player_descriptions.extend(formatted_data)
-                print(f"Formatted player data for {sport_key}: {formatted_data}")
-    # If still no player data, fall back to scraping DraftKings (if implemented)
-    if not player_descriptions:
-        print("No player-specific data from API; attempting to scrape DraftKings.")
-        for sport_key in SPORTS_BASE_URLS.keys():
-            scraped_data = await scrape_draftkings_player_props(sport_key)
-            if scraped_data:
-                player_descriptions.extend(scraped_data)
-                print(f"Scraped player data for {sport_key}: {scraped_data}")
+    # (Optional) If no data from TheSportsDB, you could add additional sources here.
+
     if not player_descriptions:
         print("No player-specific data found.")
         return {"best_player_bet": "Player prop bets are unavailable for this sport."}
