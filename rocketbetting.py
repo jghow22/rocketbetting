@@ -231,25 +231,26 @@ def generate_best_player_bet_with_ai(player_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate player bet recommendation: {e}"}
 
-# --- Fetch player data from TheSportsDB ---
+# --- Updated: Fetch player data from TheSportsDB ---
 def fetch_player_data_thesportsdb(api_key, sport):
     """
-    Fetch player data from TheSportsDB for the given sport.
-    Note: The free searchplayers.php endpoint primarily returns NBA players.
-    For NFL or MLS, we currently return an empty list.
+    Fetch player data from TheSportsDB.
+    For NBA, use the 'search_all_players.php' endpoint to return all NBA players.
+    For other sports, no free data is available.
     """
-    if sport != "NBA":
+    if sport == "NBA":
+        base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/search_all_players.php"
+        params = {"l": "NBA"}
+        response = requests.get(base_url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("player", [])
+        else:
+            print(f"TheSportsDB request failed: {response.status_code}, {response.text}")
+        return []
+    else:
         print(f"No free player data available for {sport} from TheSportsDB.")
         return []
-    base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
-    params = {"p": "a"}
-    response = requests.get(base_url, params=params)
-    if response.status_code == 200:
-        data = response.json()
-        return data.get("player", [])
-    else:
-        print(f"TheSportsDB request failed: {response.status_code}, {response.text}")
-    return []
 
 # --- Endpoints ---
 
