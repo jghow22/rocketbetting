@@ -243,7 +243,9 @@ def fetch_player_data_thesportsdb(api_key, sport):
         response = requests.get(base_url, params=params)
         if response.status_code == 200:
             data = response.json()
-            return data.get("player", [])
+            # Ensure we only return dictionary items.
+            players = data.get("player", [])
+            return [p for p in players if isinstance(p, dict)]
         else:
             print(f"TheSportsDB request failed: {response.status_code}, {response.text}")
         return []
@@ -378,7 +380,8 @@ async def get_player_best_bet(sport: str = Query("NBA", description="Sport code 
     thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport)
     if thesportsdb_data:
         for player in thesportsdb_data:
-            # If the player object includes "strSport", filter by the selected sport.
+            if not isinstance(player, dict):
+                continue  # Skip if not a dictionary
             if "strSport" in player and player["strSport"].upper() != sport:
                 continue
             name = player.get("strPlayer")
@@ -392,13 +395,16 @@ async def get_player_best_bet(sport: str = Query("NBA", description="Sport code 
     
     # For NBA, if no data is returned, use fallback sample data.
     if sport == "NBA" and not player_descriptions:
-        player_descriptions = [
-            "NBA: LeBron James - Position: Forward",
-            "NBA: Stephen Curry - Position: Guard",
-            "NBA: Kevin Durant - Position: Forward",
-            "NBA: Giannis Antetokounmpo - Position: Forward",
-            "NBA: James Harden - Position: Guard"
+        fallback = [
+            {"strPlayer": "LeBron James", "strPosition": "Forward", "strSport": "NBA"},
+            {"strPlayer": "Stephen Curry", "strPosition": "Guard", "strSport": "NBA"},
+            {"strPlayer": "Kevin Durant", "strPosition": "Forward", "strSport": "NBA"},
+            {"strPlayer": "Giannis Antetokounmpo", "strPosition": "Forward", "strSport": "NBA"},
+            {"strPlayer": "James Harden", "strPosition": "Guard", "strSport": "NBA"}
         ]
+        for player in fallback:
+            desc = f"{sport}: {player['strPlayer']} - Position: {player['strPosition']}"
+            player_descriptions.append(desc)
         print("Using fallback NBA player data:", player_descriptions)
     
     if not player_descriptions:
