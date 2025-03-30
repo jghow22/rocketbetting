@@ -243,8 +243,8 @@ def fetch_player_data_thesportsdb(api_key, sport):
         response = requests.get(base_url, params=params)
         if response.status_code == 200:
             data = response.json()
-            # Ensure we only return dictionary items.
             players = data.get("player", [])
+            # Ensure we only return dictionary items.
             return [p for p in players if isinstance(p, dict)]
         else:
             print(f"TheSportsDB request failed: {response.status_code}, {response.text}")
@@ -380,8 +380,10 @@ async def get_player_best_bet(sport: str = Query("NBA", description="Sport code 
     thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport)
     if thesportsdb_data:
         for player in thesportsdb_data:
+            # Skip if the item is not a dict
             if not isinstance(player, dict):
-                continue  # Skip if not a dictionary
+                continue
+            # If the player's sport is provided, ensure it matches
             if "strSport" in player and player["strSport"].upper() != sport:
                 continue
             name = player.get("strPlayer")
