@@ -214,12 +214,13 @@ def fetch_player_data_thesportsdb(api_key, sport):
 @app.get("/games")
 def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
     if sport:
-        base_url = SPORTS_BASE_URLS.get(sport.upper())
+        sport = sport.strip().upper()
+        base_url = SPORTS_BASE_URLS.get(sport)
         if base_url:
             odds_data = fetch_odds(API_KEY, base_url)
             if odds_data:
                 for game in odds_data:
-                    game["sport"] = sport.upper()
+                    game["sport"] = sport
                 return odds_data
             else:
                 return {"error": f"No games found for {sport}."}
@@ -235,7 +236,7 @@ def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, 
                 all_games.extend(odds_data)
         return all_games if all_games else {"error": "No games found."}
 
-# Overall (across all sports) best picks endpoints
+# Overall best picks endpoints (across all sports)
 @app.get("/best-pick")
 def get_best_pick():
     game_descriptions = []
@@ -254,11 +255,10 @@ def get_best_parlay():
             game_descriptions.extend(format_odds_for_ai(odds_data, sport_key))
     return {"best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Sport-specific endpoints using generic routes
-
+# Sport-specific endpoints
 @app.get("/sport-best-pick")
 def get_sport_best_pick(sport: str = Query(..., description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
-    sport = sport.upper()
+    sport = sport.strip().upper()
     if sport not in SPORTS_BASE_URLS:
         return {"error": "Sport not supported."}
     odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS[sport])
@@ -270,7 +270,7 @@ def get_sport_best_pick(sport: str = Query(..., description="Sport code (e.g., N
 
 @app.get("/sport-best-parlay")
 def get_sport_best_parlay(sport: str = Query(..., description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
-    sport = sport.upper()
+    sport = sport.strip().upper()
     if sport not in SPORTS_BASE_URLS:
         return {"error": "Sport not supported."}
     odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS[sport])
@@ -345,52 +345,51 @@ def get_nhl_best_parlay():
     game_descriptions = format_odds_for_ai(nhl_odds_data, "NHL")
     return {"nhl_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Endpoint for player-specific bet recommendations (for selected sport)
+# Endpoint for player-specific bet recommendations for a selected sport
 @app.get("/player-best-bet")
 async def get_player_best_bet(sport: str = Query("Overall", description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
+    sport = sport.strip().upper()
     player_descriptions = []
-    # For NBA, try TheSportsDB; for all other sports, use fallback data.
-    if sport.upper() == "NBA":
-        thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport.upper())
+    if sport == "NBA":
+        thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport)
         if thesportsdb_data:
             for player in thesportsdb_data:
                 if isinstance(player, dict):
                     name = player.get("strPlayer")
                     position = player.get("strPosition")
                     if name and position:
-                        desc = f"{sport.upper()}: {name} - Position: {position}"
+                        desc = f"{sport}: {name} - Position: {position}"
                         player_descriptions.append(desc)
         else:
             print(f"No player data from TheSportsDB for {sport}.")
+    elif sport == "MLB":
+        player_descriptions.extend([
+            "MLB: Jacob deGrom - Position: Pitcher",
+            "MLB: Gerrit Cole - Position: Pitcher",
+            "MLB: Mike Trout - Position: Outfielder"
+        ])
+    elif sport == "MLS":
+        player_descriptions.extend([
+            "MLS: Carlos Vela - Position: Forward",
+            "MLS: Josef Martinez - Position: Forward",
+            "MLS: Nicolas Lodeiro - Position: Midfielder"
+        ])
+    elif sport == "NFL":
+        player_descriptions.extend([
+            "NFL: Patrick Mahomes - Position: Quarterback",
+            "NFL: Aaron Donald - Position: Defensive Tackle",
+            "NFL: Derrick Henry - Position: Running Back"
+        ])
+    elif sport == "NHL":
+        player_descriptions.extend([
+            "NHL: Connor McDavid - Position: Center",
+            "NHL: Auston Matthews - Position: Forward",
+            "NHL: Sidney Crosby - Position: Center",
+            "NHL: Nathan MacKinnon - Position: Forward",
+            "NHL: Alex Ovechkin - Position: Left Wing"
+        ])
     else:
-        if sport.upper() == "MLB":
-            player_descriptions.extend([
-                "MLB: Jacob deGrom - Position: Pitcher",
-                "MLB: Gerrit Cole - Position: Pitcher",
-                "MLB: Mike Trout - Position: Outfielder"
-            ])
-        elif sport.upper() == "MLS":
-            player_descriptions.extend([
-                "MLS: Carlos Vela - Position: Forward",
-                "MLS: Josef Martinez - Position: Forward",
-                "MLS: Nicolas Lodeiro - Position: Midfielder"
-            ])
-        elif sport.upper() == "NFL":
-            player_descriptions.extend([
-                "NFL: Patrick Mahomes - Position: Quarterback",
-                "NFL: Aaron Donald - Position: Defensive Tackle",
-                "NFL: Derrick Henry - Position: Running Back"
-            ])
-        elif sport.upper() == "NHL":
-            player_descriptions.extend([
-                "NHL: Connor McDavid - Position: Center",
-                "NHL: Auston Matthews - Position: Forward",
-                "NHL: Sidney Crosby - Position: Center",
-                "NHL: Nathan MacKinnon - Position: Forward",
-                "NHL: Alex Ovechkin - Position: Left Wing"
-            ])
-        else:
-            print("No fallback player data available for this sport.")
+        print("No fallback player data available for this sport.")
     best_player_bet = generate_best_player_bet_with_ai(player_descriptions)
     if isinstance(best_player_bet, dict) and "error" in best_player_bet:
         print("Error generating player bet:", best_player_bet["error"])
