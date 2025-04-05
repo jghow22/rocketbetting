@@ -1,14 +1,18 @@
 import os
-import asyncio, re, json, time
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+import re
+import json
+import time
 import requests
 import openai
+import uvicorn
+import asyncio
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 from requests_html import AsyncHTMLSession
 from bs4 import BeautifulSoup
 
-# Use standard asyncio loop (apply nest_asyncio if not using uvloop)
+# Force uvicorn to use the standard asyncio loop instead of uvloop
+os.environ["UVICORN_LOOP"] = "asyncio"
 try:
     loop = asyncio.get_running_loop()
 except RuntimeError:
@@ -19,7 +23,10 @@ else:
     import nest_asyncio
     nest_asyncio.apply()
 
+# Initialize FastAPI app
 app = FastAPI()
+
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,21 +35,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Print API keys (masked)
 print(f"Using OpenAI API key: {os.getenv('OPENAI_API_KEY')[:5]}*****")
 print(f"Using Odds API key: {os.getenv('ODDS_API_KEY')[:5]}*****")
 print(f"Using TheSportsDB API key: {os.getenv('THESPORTSDB_API_KEY')[:5]}*****")
 
+# Retrieve API keys from environment
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THESPORTSDB_API_KEY = os.getenv("THESPORTSDB_API_KEY")
+
 openai.api_key = OPENAI_API_KEY
 
-# Define the sports endpoints including MLB
+# Add all sports here (NBA, NFL, MLS, MLB, NHL, etc.)
 SPORTS_BASE_URLS = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
     "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds",
     "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
-    "MLB": "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
+    "MLB": "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds",
+    "NHL": "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
 }
 
 def extract_json(text):
@@ -58,11 +69,10 @@ def fetch_odds(api_key, base_url, markets="h2h", regions="us"):
     params = {
         "apiKey": api_key,
         "oddsFormat": "decimal",
+        "regions": regions
     }
     if markets:
         params["markets"] = markets
-    if regions is not None:
-        params["regions"] = regions
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
         return response.json()
@@ -91,16 +101,10 @@ def format_odds_for_ai(odds_data, sport):
                             )
     return game_descriptions
 
-def get_sport_hint(descriptions):
-    for desc in descriptions:
-        if ":" in desc:
-            return desc.split(":", 1)[0].strip()
-    return ""
-
 def generate_best_pick_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
-    sport_hint = get_sport_hint(game_descriptions)
+    sport_hint = game_descriptions[0].split(":", 1)[0].strip() if game_descriptions else ""
     sport_line = f"The sport is {sport_hint}." if sport_hint else ""
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific straight bet that you consider the best. "
@@ -115,7 +119,7 @@ def generate_best_pick_with_ai(game_descriptions):
             temperature=0,
             max_tokens=300,
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with a valid JSON object in the exact format."},
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -133,7 +137,7 @@ def generate_best_pick_with_ai(game_descriptions):
 def generate_best_parlay_with_ai(game_descriptions):
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
-    sport_hint = get_sport_hint(game_descriptions)
+    sport_hint = game_descriptions[0].split(":", 1)[0].strip() if game_descriptions else ""
     sport_line = f"The sport is {sport_hint}." if sport_hint else ""
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific parlay bet that you consider the best. "
@@ -148,7 +152,7 @@ def generate_best_parlay_with_ai(game_descriptions):
             temperature=0,
             max_tokens=300,
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with a valid JSON object in the exact format."},
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -166,7 +170,7 @@ def generate_best_parlay_with_ai(game_descriptions):
 def generate_best_player_bet_with_ai(player_descriptions):
     if not player_descriptions:
         return {"error": "Player prop bets are unavailable for this sport."}
-    sport_hint = get_sport_hint(player_descriptions)
+    sport_hint = player_descriptions[0].split(":")[0].strip() if player_descriptions else ""
     sport_line = f"The sport is {sport_hint}." if sport_hint else ""
     prompt = (
         "You are an expert sports betting assistant. Analyze the following player-specific betting options and choose one specific player bet that you consider the best. "
@@ -181,7 +185,7 @@ def generate_best_player_bet_with_ai(player_descriptions):
             temperature=0,
             max_tokens=300,
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with a valid JSON object in the exact format."},
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -196,23 +200,21 @@ def generate_best_player_bet_with_ai(player_descriptions):
     except Exception as e:
         return {"error": f"Failed to generate player bet recommendation: {e}"}
 
-# Fetch player data from TheSportsDB, filtering by sport if possible.
+# Fetch player data from TheSportsDB for a given sport
 def fetch_player_data_thesportsdb(api_key, sport):
     base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
+    # Note: The API might not support sport filtering so we use the query 'a'
     params = {"p": "a"}
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
         data = response.json()
-        players = data.get("player", [])
-        # Filter players by sport (if available)
-        filtered = [player for player in players if player.get("strSport", "").upper() == sport.upper()]
-        return filtered
+        return data.get("player", [])
     else:
         print(f"TheSportsDB request failed: {response.status_code}, {response.text}")
     return []
 
 @app.get("/games")
-def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, MLS, MLB)")):
+def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
     if sport:
         base_url = SPORTS_BASE_URLS.get(sport.upper())
         if base_url:
@@ -235,111 +237,145 @@ def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, 
                 all_games.extend(odds_data)
         return all_games if all_games else {"error": "No games found."}
 
+# Endpoints for overall (across all sports) best picks
 @app.get("/best-pick")
 def get_best_pick():
-    all_games = []
+    game_descriptions = []
     for sport_key, base_url in SPORTS_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url)
         if odds_data:
-            all_games.extend(format_odds_for_ai(odds_data, sport_key))
-    return {"best_pick": generate_best_pick_with_ai(all_games)}
+            game_descriptions.extend(format_odds_for_ai(odds_data, sport_key))
+    return {"best_pick": generate_best_pick_with_ai(game_descriptions)}
 
 @app.get("/best-parlay")
 def get_best_parlay():
-    all_games = []
+    game_descriptions = []
     for sport_key, base_url in SPORTS_BASE_URLS.items():
         odds_data = fetch_odds(API_KEY, base_url)
         if odds_data:
-            all_games.extend(format_odds_for_ai(odds_data, sport_key))
-    return {"best_parlay": generate_best_parlay_with_ai(all_games)}
+            game_descriptions.extend(format_odds_for_ai(odds_data, sport_key))
+    return {"best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-@app.get("/sport-best-pick")
-def get_sport_best_pick(sport: str = Query(..., description="Sport code (e.g., NBA, NFL, MLS, MLB)")):
-    base_url = SPORTS_BASE_URLS.get(sport.upper())
-    if not base_url:
-        return {"error": "Sport not supported."}
-    odds_data = fetch_odds(API_KEY, base_url)
-    if not odds_data:
-        return {"error": f"No games found for {sport}."}
-    game_descriptions = format_odds_for_ai(odds_data, sport.upper())
-    return {"sport_best_pick": generate_best_pick_with_ai(game_descriptions)}
+# Sport-specific endpoints for best picks
+@app.get("/nba-best-pick")
+def get_nba_best_pick():
+    nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
+    if not nba_odds_data:
+        return {"error": "No NBA games found."}
+    game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
+    return {"nba_best_pick": generate_best_pick_with_ai(game_descriptions)}
 
-@app.get("/sport-best-parlay")
-def get_sport_best_parlay(sport: str = Query(..., description="Sport code (e.g., NBA, NFL, MLS, MLB)")):
-    base_url = SPORTS_BASE_URLS.get(sport.upper())
-    if not base_url:
-        return {"error": "Sport not supported."}
-    odds_data = fetch_odds(API_KEY, base_url)
-    if not odds_data:
-        return {"error": f"No games found for {sport}."}
-    game_descriptions = format_odds_for_ai(odds_data, sport.upper())
-    return {"sport_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
+@app.get("/nba-best-parlay")
+def get_nba_best_parlay():
+    nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
+    if not nba_odds_data:
+        return {"error": "No NBA games found."}
+    game_descriptions = format_odds_for_ai(nba_odds_data, "NBA")
+    return {"nba_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
+
+@app.get("/mls-best-pick")
+def get_mls_best_pick():
+    mls_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLS"])
+    if not mls_odds_data:
+        return {"error": "No MLS games found."}
+    game_descriptions = format_odds_for_ai(mls_odds_data, "MLS")
+    return {"mls_best_pick": generate_best_pick_with_ai(game_descriptions)}
+
+@app.get("/mls-best-parlay")
+def get_mls_best_parlay():
+    mls_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLS"])
+    if not mls_odds_data:
+        return {"error": "No MLS games found."}
+    game_descriptions = format_odds_for_ai(mls_odds_data, "MLS")
+    return {"mls_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
 @app.get("/mlb-best-pick")
 def get_mlb_best_pick():
-    odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLB"])
-    if not odds_data:
+    mlb_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLB"])
+    if not mlb_odds_data:
         return {"error": "No MLB games found."}
-    game_descriptions = format_odds_for_ai(odds_data, "MLB")
+    game_descriptions = format_odds_for_ai(mlb_odds_data, "MLB")
     return {"mlb_best_pick": generate_best_pick_with_ai(game_descriptions)}
 
 @app.get("/mlb-best-parlay")
 def get_mlb_best_parlay():
-    odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLB"])
-    if not odds_data:
+    mlb_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["MLB"])
+    if not mlb_odds_data:
         return {"error": "No MLB games found."}
-    game_descriptions = format_odds_for_ai(odds_data, "MLB")
+    game_descriptions = format_odds_for_ai(mlb_odds_data, "MLB")
     return {"mlb_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Updated player-best-bet endpoint
+@app.get("/nhl-best-pick")
+def get_nhl_best_pick():
+    nhl_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NHL"])
+    if not nhl_odds_data:
+        return {"error": "No NHL games found."}
+    game_descriptions = format_odds_for_ai(nhl_odds_data, "NHL")
+    return {"nhl_best_pick": generate_best_pick_with_ai(game_descriptions)}
+
+@app.get("/nhl-best-parlay")
+def get_nhl_best_parlay():
+    nhl_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NHL"])
+    if not nhl_odds_data:
+        return {"error": "No NHL games found."}
+    game_descriptions = format_odds_for_ai(nhl_odds_data, "NHL")
+    return {"nhl_best_parlay": generate_best_parlay_with_ai(game_descriptions)}
+
+# Endpoint for player-specific bet recommendations (for selected sport)
 @app.get("/player-best-bet")
-async def get_player_best_bet(sport: str = Query("NBA", description="Sport code (e.g., NBA, NFL, MLS, MLB)")):
-    # If the user selected Overall, ask them to choose a specific sport.
-    if sport.upper() == "OVERALL":
-        return {"best_player_bet": "Please select a specific sport for player prop bets."}
+async def get_player_best_bet(sport: str = Query("Overall", description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
     player_descriptions = []
-    thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport.upper())
-    if thesportsdb_data:
-        for player in thesportsdb_data:
-            name = player.get("strPlayer")
-            position = player.get("strPosition")
-            if name and position:
-                player_descriptions.append(f"{sport.upper()}: {name} - Position: {position}")
-        print(f"Fetched TheSportsDB player data: {player_descriptions}")
-    # Fallback if no player data is available
+    if sport.upper() != "OVERALL":
+        thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport.upper())
+        if thesportsdb_data:
+            for player in thesportsdb_data:
+                # Sometimes the API returns a string instead of a dict, so we check
+                if isinstance(player, dict):
+                    name = player.get("strPlayer")
+                    position = player.get("strPosition")
+                    if name and position:
+                        desc = f"{sport.upper()}: {name} - Position: {position}"
+                        player_descriptions.append(desc)
+        else:
+            print(f"No player data from TheSportsDB for {sport}.")
     if not player_descriptions:
+        # Fallback data for each sport
         if sport.upper() == "NBA":
-            player_descriptions = [
+            player_descriptions.extend([
                 "NBA: LeBron James - Position: Forward",
                 "NBA: Stephen Curry - Position: Guard",
                 "NBA: Kevin Durant - Position: Forward",
                 "NBA: Giannis Antetokounmpo - Position: Forward",
                 "NBA: James Harden - Position: Guard"
-            ]
+            ])
         elif sport.upper() == "MLB":
-            player_descriptions = [
-                "MLB: Mike Trout - Position: Center Field",
-                "MLB: Mookie Betts - Position: Right Field",
+            player_descriptions.extend([
                 "MLB: Jacob deGrom - Position: Pitcher",
-                "MLB: Fernando Tatis Jr. - Position: Shortstop",
-                "MLB: Ronald Acuña Jr. - Position: Outfielder"
-            ]
+                "MLB: Gerrit Cole - Position: Pitcher",
+                "MLB: Mike Trout - Position: Outfielder"
+            ])
+        elif sport.upper() == "MLS":
+            player_descriptions.extend([
+                "MLS: Carlos Vela - Position: Forward",
+                "MLS: Josef Martinez - Position: Forward",
+                "MLS: Nicolas Lodeiro - Position: Midfielder"
+            ])
         elif sport.upper() == "NFL":
-            player_descriptions = [
+            player_descriptions.extend([
                 "NFL: Patrick Mahomes - Position: Quarterback",
-                "NFL: Aaron Donald - Position: Defensive Lineman",
-                "NFL: Derrick Henry - Position: Running Back",
-                "NFL: Travis Kelce - Position: Tight End",
-                "NFL: Josh Allen - Position: Quarterback"
-            ]
-        elif sport.upper() == "CFB":
-            player_descriptions = [
-                "CFB: Bryce Young - Position: Quarterback",
-                "CFB: C.J. Stroud - Position: Quarterback",
-                "CFB: Bijan Robinson - Position: Running Back",
-                "CFB: Will Levis - Position: Quarterback",
-                "CFB: Jalin Hyatt - Position: Wide Receiver"
-            ]
+                "NFL: Aaron Donald - Position: Defensive Tackle",
+                "NFL: Derrick Henry - Position: Running Back"
+            ])
+        elif sport.upper() == "NHL":
+            player_descriptions.extend([
+                "NHL: Connor McDavid - Position: Center",
+                "NHL: Auston Matthews - Position: Forward",
+                "NHL: Sidney Crosby - Position: Center",
+                "NHL: Nathan MacKinnon - Position: Forward",
+                "NHL: Alex Ovechkin - Position: Left Wing"
+            ])
+        else:
+            print("No fallback player data available for this sport.")
     best_player_bet = generate_best_player_bet_with_ai(player_descriptions)
     if isinstance(best_player_bet, dict) and "error" in best_player_bet:
         print("Error generating player bet:", best_player_bet["error"])
