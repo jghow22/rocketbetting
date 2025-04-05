@@ -46,7 +46,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THESPORTSDB_API_KEY = os.getenv("THESPORTSDB_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-# Define supported sports and their endpoints
+# Supported sports and their odds API endpoints
 SPORTS_BASE_URLS = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
     "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds",
@@ -280,7 +280,7 @@ def get_sport_best_parlay(sport: str = Query(..., description="Sport code (e.g.,
     best_parlay = generate_best_parlay_with_ai(game_descriptions)
     return {"sport_best_parlay": best_parlay}
 
-# Endpoints for individual sports overall best picks/parlays
+# Individual sports overall endpoints
 @app.get("/nba-best-pick")
 def get_nba_best_pick():
     nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
@@ -349,7 +349,8 @@ def get_nhl_best_parlay():
 @app.get("/player-best-bet")
 async def get_player_best_bet(sport: str = Query("Overall", description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
     player_descriptions = []
-    if sport.upper() != "OVERALL":
+    # For NBA, try TheSportsDB; for all other sports, use fallback data.
+    if sport.upper() == "NBA":
         thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport.upper())
         if thesportsdb_data:
             for player in thesportsdb_data:
@@ -361,16 +362,8 @@ async def get_player_best_bet(sport: str = Query("Overall", description="Sport c
                         player_descriptions.append(desc)
         else:
             print(f"No player data from TheSportsDB for {sport}.")
-    if not player_descriptions:
-        if sport.upper() == "NBA":
-            player_descriptions.extend([
-                "NBA: LeBron James - Position: Forward",
-                "NBA: Stephen Curry - Position: Guard",
-                "NBA: Kevin Durant - Position: Forward",
-                "NBA: Giannis Antetokounmpo - Position: Forward",
-                "NBA: James Harden - Position: Guard"
-            ])
-        elif sport.upper() == "MLB":
+    else:
+        if sport.upper() == "MLB":
             player_descriptions.extend([
                 "MLB: Jacob deGrom - Position: Pitcher",
                 "MLB: Gerrit Cole - Position: Pitcher",
