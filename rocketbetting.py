@@ -44,10 +44,9 @@ print(f"Using TheSportsDB API key: {os.getenv('THESPORTSDB_API_KEY')[:5]}*****")
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THESPORTSDB_API_KEY = os.getenv("THESPORTSDB_API_KEY")
-
 openai.api_key = OPENAI_API_KEY
 
-# Add all sports here (NBA, NFL, MLS, MLB, NHL, etc.)
+# Define supported sports and their endpoints
 SPORTS_BASE_URLS = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
     "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds",
@@ -203,7 +202,6 @@ def generate_best_player_bet_with_ai(player_descriptions):
 # Fetch player data from TheSportsDB for a given sport
 def fetch_player_data_thesportsdb(api_key, sport):
     base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
-    # Note: The API might not support sport filtering so we use the query 'a'
     params = {"p": "a"}
     response = requests.get(base_url, params=params)
     if response.status_code == 200:
@@ -237,7 +235,7 @@ def get_games(sport: str = Query(None, description="Sport code (e.g., NBA, NFL, 
                 all_games.extend(odds_data)
         return all_games if all_games else {"error": "No games found."}
 
-# Endpoints for overall (across all sports) best picks
+# Overall (across all sports) best picks endpoints
 @app.get("/best-pick")
 def get_best_pick():
     game_descriptions = []
@@ -256,7 +254,33 @@ def get_best_parlay():
             game_descriptions.extend(format_odds_for_ai(odds_data, sport_key))
     return {"best_parlay": generate_best_parlay_with_ai(game_descriptions)}
 
-# Sport-specific endpoints for best picks
+# Sport-specific endpoints using generic routes
+
+@app.get("/sport-best-pick")
+def get_sport_best_pick(sport: str = Query(..., description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
+    sport = sport.upper()
+    if sport not in SPORTS_BASE_URLS:
+        return {"error": "Sport not supported."}
+    odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS[sport])
+    if not odds_data:
+        return {"error": f"No {sport} games found."}
+    game_descriptions = format_odds_for_ai(odds_data, sport)
+    best_pick = generate_best_pick_with_ai(game_descriptions)
+    return {"sport_best_pick": best_pick}
+
+@app.get("/sport-best-parlay")
+def get_sport_best_parlay(sport: str = Query(..., description="Sport code (e.g., NBA, NFL, MLS, MLB, NHL)")):
+    sport = sport.upper()
+    if sport not in SPORTS_BASE_URLS:
+        return {"error": "Sport not supported."}
+    odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS[sport])
+    if not odds_data:
+        return {"error": f"No {sport} games found."}
+    game_descriptions = format_odds_for_ai(odds_data, sport)
+    best_parlay = generate_best_parlay_with_ai(game_descriptions)
+    return {"sport_best_parlay": best_parlay}
+
+# Endpoints for individual sports overall best picks/parlays
 @app.get("/nba-best-pick")
 def get_nba_best_pick():
     nba_odds_data = fetch_odds(API_KEY, SPORTS_BASE_URLS["NBA"])
@@ -329,7 +353,6 @@ async def get_player_best_bet(sport: str = Query("Overall", description="Sport c
         thesportsdb_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sport.upper())
         if thesportsdb_data:
             for player in thesportsdb_data:
-                # Sometimes the API returns a string instead of a dict, so we check
                 if isinstance(player, dict):
                     name = player.get("strPlayer")
                     position = player.get("strPosition")
@@ -339,7 +362,6 @@ async def get_player_best_bet(sport: str = Query("Overall", description="Sport c
         else:
             print(f"No player data from TheSportsDB for {sport}.")
     if not player_descriptions:
-        # Fallback data for each sport
         if sport.upper() == "NBA":
             player_descriptions.extend([
                 "NBA: LeBron James - Position: Forward",
