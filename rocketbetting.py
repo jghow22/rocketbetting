@@ -146,7 +146,20 @@ def format_datetime(dt_str: str) -> str:
         return dt.strftime("%A, %B %d, %Y at %I:%M %p")
     except Exception:
         return dt_str
+
+def evaluate_bet_value(odds: float, estimated_probability: float) -> float:
+    """
+    Calculate the expected value of a bet.
     
+    Args:
+        odds: Decimal odds for the bet
+        estimated_probability: Our estimated probability of the bet winning (0-1)
+        
+    Returns:
+        Expected value of the bet (positive is good)
+    """
+    return (odds * estimated_probability) - 1
+
 def fetch_odds(
     api_key: str, 
     base_url: str, 
@@ -204,16 +217,19 @@ def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, An
     
 def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
     """
-    Format odds data into human-readable descriptions for AI analysis.
+    Format odds data with enhanced context for better AI analysis.
     
     Args:
         odds_data: List of game odds data
         sport: Sport code (e.g., NBA, NFL)
         
     Returns:
-        List of formatted game descriptions
+        List of formatted game descriptions with detailed context
     """
     game_descriptions = []
+    
+    # Get today's date for context
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     
     for game in odds_data:
         home_team = game.get("home_team")
@@ -223,14 +239,31 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
         if not home_team or not away_team:
             continue
             
-        # Add game time if available
+        # Format game time and determine if it's today
         game_time = ""
+        is_today = False
         if commence_time:
             try:
                 dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
                 game_time = f" on {dt.strftime('%Y-%m-%d at %H:%M UTC')}"
+                is_today = dt.strftime("%Y-%m-%d") == today
             except ValueError:
                 pass
+                
+        # Add additional context based on sport
+        additional_context = ""
+        if sport == "NBA":
+            additional_context = f" | Context: NBA basketball game{', today' if is_today else ''}"
+        elif sport == "NHL":
+            additional_context = f" | Context: NHL hockey game{', today' if is_today else ''}"
+        elif sport == "NFL":
+            additional_context = f" | Context: NFL football game{', today' if is_today else ''}"
+        elif sport == "MLB":
+            additional_context = f" | Context: MLB baseball game{', today' if is_today else ''}"
+        elif sport == "MLS":
+            additional_context = f" | Context: MLS soccer match{', today' if is_today else ''}"
+        elif sport == "CFB":
+            additional_context = f" | Context: College football game{', today' if is_today else ''}"
             
         if game.get("bookmakers"):
             bookmaker = game["bookmakers"][0]
@@ -244,8 +277,15 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
                         away_odds = next((o.get("price") for o in outcomes if o.get("name") == away_team), None)
                         
                         if home_odds and away_odds:
+                            # Calculate implied probabilities
+                            home_implied_prob = round(100 / home_odds, 1)
+                            away_implied_prob = round(100 / away_odds, 1)
+                            
                             game_descriptions.append(
-                                f"{sport}: {home_team} vs {away_team}{game_time} | Home Odds: {home_odds}, Away Odds: {away_odds} | Source: {bookmaker_name}"
+                                f"{sport}: {home_team} (Home) vs {away_team} (Away){game_time} | " 
+                                f"Odds: {home_team}: {home_odds} ({home_implied_prob}% implied), "
+                                f"{away_team}: {away_odds} ({away_implied_prob}% implied) | "
+                                f"Source: {bookmaker_name}{additional_context}"
                             )
     
     return game_descriptions
@@ -259,14 +299,24 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
         sport: Sport code (e.g., NBA, NFL)
         
     Returns:
-        List of formatted player bet descriptions
+        List of formatted player bet descriptions with enhanced context
     """
     player_descriptions = []
     
     for game in odds_data:
         home_team = game.get("home_team", "")
         away_team = game.get("away_team", "")
+        commence_time = game.get("commence_time", "")
         matchup = f"{home_team} vs {away_team}" if home_team and away_team else ""
+        
+        # Format game time
+        game_time = ""
+        if commence_time:
+            try:
+                dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
+                game_time = f" on {dt.strftime('%Y-%m-%d at %H:%M UTC')}"
+            except ValueError:
+                pass
         
         if "player_props" not in game:
             continue
@@ -279,9 +329,12 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
             
             if name and bet_type and odds:
                 line_str = f" ({line})" if line else ""
-                match_str = f" in {matchup}" if matchup else ""
+                implied_prob = round(100 / odds, 1) if odds else 0
+                
                 player_descriptions.append(
-                    f"{sport}: {name} - {bet_type}{line_str}{match_str} | Odds: {odds}"
+                    f"{sport}: {name} - {bet_type}{line_str} in {matchup}{game_time} | "
+                    f"Odds: {odds} ({implied_prob}% implied probability) | "
+                    f"Teams: {home_team} (Home), {away_team} (Away)"
                 )
                 
     return player_descriptions
@@ -344,7 +397,7 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
 
 def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, str], Dict[str, Any]]:
     """
-    Generate the best straight bet recommendation using AI.
+    Generate the best straight bet recommendation using enhanced AI analysis.
     
     Args:
         game_descriptions: List of formatted game descriptions
@@ -360,11 +413,20 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
     prompt = (
-        "You are an expert sports betting assistant. Analyze the following games and choose one specific straight bet that you consider the best. "
-        "DO NOT choose a bet solely based on high odds. Evaluate matchup context, team performance, injuries, and risk factors. "
-        "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
-        '{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Your reasoning]", "confidence": [0-100]}\n\n'
-        + sport_line + "\n" + "\n".join(game_descriptions)
+        "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
+        "Analyze the following games and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
+        "\n\nIn your analysis, consider the following factors, in order of importance:"
+        "\n1. Recent team performance and momentum (last 5-10 games)"
+        "\n2. Head-to-head matchups between the teams this season"
+        "\n3. Key player availability (injuries, rest days, etc.)"
+        "\n4. Home/away performance disparities"
+        "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
+        "\n6. Statistical matchups and advantages"
+        "\n7. Value compared to the offered odds"
+        "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
+        '\n{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Detailed reasoning with specific data points]", "confidence": [0-100]}'
+        "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
+        "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
     )
     
     try:
@@ -373,9 +435,9 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0,
-            max_tokens=400,
+            max_tokens=500,  # Increased token limit for more detailed analysis
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "system", "content": "You are an expert sports betting analyst. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -407,7 +469,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
 
 def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]:
     """
-    Generate the best parlay bet recommendation using AI.
+    Generate the best parlay bet recommendation using enhanced AI analysis.
     
     Args:
         game_descriptions: List of formatted game descriptions
@@ -423,12 +485,20 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
     prompt = (
-        "You are an expert sports betting assistant. Analyze the following games and choose one specific parlay bet that you consider the best. "
-        "Choose 2-3 teams for a parlay with good value. DO NOT choose a parlay solely because it includes bets with the highest odds. "
-        "Consider matchups, risk distribution, and overall value. "
-        "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
-        '{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Your reasoning]", "confidence": [0-100]}\n\n'
-        + sport_line + "\n" + "\n".join(game_descriptions)
+        "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
+        "Analyze the following games and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
+        "\n\nIn your analysis, consider the following factors for EACH game in your parlay:"
+        "\n1. Recent team performance and momentum (last 5-10 games)"
+        "\n2. Head-to-head matchups between the teams this season"
+        "\n3. Key player availability (injuries, rest days, etc.)"
+        "\n4. Home/away performance disparities"
+        "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
+        "\n6. Statistical matchups and advantages"
+        "\n7. Diversification of risk (avoid multiple games with similar risk profiles)"
+        "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
+        '\n{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Detailed reasoning with specific data points for EACH pick]", "confidence": [0-100]}'
+        "\n\nNote: Parlay confidence should generally be lower than straight bets due to compounding risk. Only assign confidence scores above 70 in extraordinary circumstances."
+        "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
     )
     
     try:
@@ -437,9 +507,9 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0,
-            max_tokens=400,
+            max_tokens=600,  # Increased for more detailed analysis
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "system", "content": "You are an expert sports betting analyst. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -471,7 +541,7 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
 
 def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str, Any]:
     """
-    Generate the best player prop bet recommendation using AI.
+    Generate the best player prop bet recommendation using enhanced AI analysis.
     
     Args:
         player_descriptions: List of formatted player descriptions
@@ -487,11 +557,20 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
     prompt = (
-        "You are an expert sports betting assistant. Analyze the following player-specific betting options and choose one specific player bet that you consider the best. "
-        "DO NOT select a bet solely based on high odds; consider player performance, matchup context, and overall value. "
-        "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
-        '{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Your reasoning]", "confidence": [0-100]}\n\n'
-        + sport_line + "\n" + "\n".join(player_descriptions)
+        "You are an expert sports betting analyst specializing in player performance statistics and trends. "
+        "Analyze the following player prop betting options and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
+        "\n\nIn your analysis, consider the following factors, in order of importance:"
+        "\n1. Player's recent performance trend (last 5-10 games)"
+        "\n2. Player's performance against this specific opponent historically"
+        "\n3. Player's role in current team strategy"
+        "\n4. Matchup advantages/disadvantages (defensive matchups, etc.)"
+        "\n5. Situational factors (minutes restrictions, injuries to teammates, etc.)"
+        "\n6. Statistical anomalies that may regress to the mean"
+        "\n7. Value compared to the offered odds"
+        "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
+        '\n{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Detailed reasoning with specific statistical evidence]", "confidence": [0-100]}'
+        "\n\nYour explanation must include specific statistical data and clear reasoning."
+        "\n\n" + sport_line + "\n" + "\n".join(player_descriptions)
     )
     
     try:
@@ -500,9 +579,9 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0,
-            max_tokens=400,
+            max_tokens=500,  # Increased for more detailed analysis
             messages=[
-                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "system", "content": "You are an expert sports betting analyst. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -613,70 +692,6 @@ async def get_best_pick():
     bets_cache[cache_key] = result
     return {"best_pick": result}
 
-@app.get("/best-parlay")
-async def get_best_parlay():
-    """
-    Get the best parlay bet recommendation across all sports.
-    
-    Returns:
-        Dictionary with best parlay recommendation
-    """
-    # Verify API keys
-    verify_api_keys()
-    
-    cache_key = "best_parlay:all"
-    
-    # Check if we have cached data
-    if cache_key in bets_cache:
-        logger.info("Returning cached best parlay recommendation")
-        return {"best_parlay": bets_cache[cache_key]}
-        
-    all_desc = []
-    for sp, url in SPORTS_BASE_URLS.items():
-        data = fetch_odds(API_KEY, url)
-        if data:
-            all_desc += format_odds_for_ai(data, sp)
-    
-    result = generate_best_parlay_with_ai(all_desc)
-    bets_cache[cache_key] = result
-    return {"best_parlay": result}
-
-@app.get("/sport-best-pick")
-async def get_sport_best_pick(
-    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
-):
-    """
-    Get the best straight bet recommendation for a specific sport.
-    
-    Args:
-        sport: Sport code to get recommendations for
-        
-    Returns:
-        Dictionary with best pick recommendation for the sport
-    """
-    # Verify API keys
-    verify_api_keys()
-    
-    cache_key = f"best_pick:{sport}"
-    
-    # Check if we have cached data
-    if cache_key in bets_cache:
-        logger.info(f"Returning cached best pick for {sport}")
-        return {"sport_best_pick": bets_cache[cache_key]}
-        
-    sp = sport.upper()
-    url = SPORTS_BASE_URLS.get(sp)
-    if not url:
-        return {"error": f"Sport not supported: {sport}"}
-        
-    data = fetch_odds(API_KEY, url)
-    if not data:
-        return {"error": f"No games found for {sp}."}
-    
-    result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
-    bets_cache[cache_key] = result
-    return {"sport_best_pick": result}
-
 @app.get("/sport-best-parlay")
 async def get_sport_best_parlay(
     sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
@@ -780,6 +795,18 @@ async def get_available_sports():
         *[{"code": code, "name": display} for code, display in SPORT_DISPLAY_NAMES.items()]
     ]
 
+@app.get("/clear-cache")
+async def clear_cache():
+    """
+    Clear all cached data to force fresh API calls and recommendations.
+    
+    Returns:
+        Confirmation message
+    """
+    games_cache.clear()
+    bets_cache.clear()
+    return {"message": "Cache cleared successfully. Next requests will fetch fresh data."}
+
 @app.get("/")
 def read_root():
     """
@@ -790,7 +817,7 @@ def read_root():
     """
     return {
         "message": "Welcome to the Sports Betting API!",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "endpoints": [
             "/games", 
             "/best-pick", 
@@ -798,7 +825,8 @@ def read_root():
             "/sport-best-pick", 
             "/sport-best-parlay", 
             "/player-best-bet",
-            "/available-sports"
+            "/available-sports",
+            "/clear-cache"
         ]
     }
 
