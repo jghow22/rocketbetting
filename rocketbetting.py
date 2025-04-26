@@ -1,32 +1,52 @@
+"""
+Sports Betting API - Backend service that provides betting recommendations
+using odds data and AI-powered analysis.
+"""
 import os
+import asyncio
+import json
+import re
+import logging
+from typing import Dict, List, Optional, Union, Any
+from datetime import datetime, timezone
+
 # Force uvicorn to use the standard asyncio loop instead of uvloop
 os.environ["UVICORN_LOOP"] = "asyncio"
 
-import asyncio
+# Set up asyncio loop
 try:
     loop = asyncio.get_running_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
+
+# Apply nest_asyncio for nested event loops if not using uvloop
 if loop.__class__.__module__.startswith("uvloop"):
     print("Detected uvloop; skipping nest_asyncio.apply()")
 else:
     import nest_asyncio
     nest_asyncio.apply()
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import requests
 import openai
-import json
-import re  # For extracting JSON via regex
-import time
+from pydantic import BaseModel
+from cachetools import TTLCache
 
-# For asynchronous scraping using requests_html if needed (not used here)
-from requests_html import AsyncHTMLSession
-from bs4 import BeautifulSoup
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-app = FastAPI()
+# Initialize FastAPI app
+app = FastAPI(
+    title="Sports Betting API",
+    description="API for sports betting recommendations powered by AI",
+    version="1.0.0"
+)
 
 # CORS settings
 app.add_middleware(
@@ -37,18 +57,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Retrieve and print API keys (masked)
-print(f"Using OpenAI API key: {os.getenv('OPENAI_API_KEY')[:5]}*****")
-print(f"Using Odds API key: {os.getenv('ODDS_API_KEY')[:5]}*****")
-print(f"Using TheSportsDB API key: {os.getenv('THESPORTSDB_API_KEY')[:5]}*****")
-
 # Get API keys from environment
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THESPORTSDB_API_KEY = os.getenv("THESPORTSDB_API_KEY")
 
-# Define available sports and their endpoints (adjust/add as needed)
-SPORTS_BASE_URLS = {
+# Print masked API keys for debugging
+if API_KEY:
+    logger.info(f"Using Odds API key: {API_KEY[:5]}*****")
+if OPENAI_API_KEY:
+    logger.info(f"Using OpenAI API key: {OPENAI_API_KEY[:5]}*****")
+if THESPORTSDB_API_KEY:
+    logger.info(f"Using TheSportsDB API key: {THESPORTSDB_API_KEY[:5]}*****")
+
+# Set OpenAI API key
+openai.api_key = OPENAI_API_KEY
+
+# Define available sports and their endpoints
+SPORTS_BASE_URLS: Dict[str, str] = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
     "NFL": "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds",
     "CFB": "https://api.the-odds-api.com/v4/sports/americanfootball_ncaaf/odds",
@@ -57,191 +83,493 @@ SPORTS_BASE_URLS = {
     "NHL": "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
 }
 
-openai.api_key = OPENAI_API_KEY
+# Define readable sport names
+SPORT_DISPLAY_NAMES: Dict[str, str] = {
+    "NBA": "Basketball (NBA)",
+    "NFL": "Football (NFL)",
+    "CFB": "College Football (NCAAF)",
+    "MLS": "Soccer (MLS)",
+    "MLB": "Baseball (MLB)",
+    "NHL": "Hockey (NHL)"
+}
 
-def extract_json(text):
-    """Extract a JSON object from text using regex."""
+# Create caches (TTL in seconds)
+games_cache = TTLCache(maxsize=100, ttl=600)  # Cache games for 10 minutes
+bets_cache = TTLCache(maxsize=100, ttl=1800)  # Cache bet recommendations for 30 minutes
+
+def verify_api_keys():
+    """Verify that required API keys are set."""
+    missing_keys = []
+    if not API_KEY:
+        missing_keys.append("ODDS_API_KEY")
+    if not OPENAI_API_KEY:
+        missing_keys.append("OPENAI_API_KEY")
+    if not THESPORTSDB_API_KEY:
+        missing_keys.append("THESPORTSDB_API_KEY")
+    
+    if missing_keys:
+        missing_str = ", ".join(missing_keys)
+        logger.error(f"Missing required API keys: {missing_str}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Server configuration error: Missing API keys ({missing_str})"
+        )
+
+def extract_json(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Extract a JSON object from text using regex.
+    
+    Args:
+        text: String that might contain a JSON object
+        
+    Returns:
+        Parsed JSON object or None if no valid JSON found
+    """
     match = re.search(r"(\{.*\})", text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(1))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to parse JSON with regex: {str(e)}")
             return None
     return None
 
-def fetch_odds(api_key, base_url, markets="h2h", regions="us"):
+def format_datetime(dt_str: str) -> str:
+    """
+    Format a datetime string into a user-friendly format.
+    
+    Args:
+        dt_str: ISO format datetime string
+    
+    Returns:
+        Formatted datetime string
+    """
+    try:
+        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        return dt.strftime("%A, %B %d, %Y at %I:%M %p")
+    except Exception:
+        return dt_str
+    
+def fetch_odds(
+    api_key: str, 
+    base_url: str, 
+    markets: str = "h2h", 
+    regions: str = "us"
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Fetch odds data from The Odds API.
+    
+    Args:
+        api_key: The Odds API key
+        base_url: Endpoint URL for specific sport
+        markets: Market types to fetch (e.g., h2h, spreads)
+        regions: Region code for odds format
+        
+    Returns:
+        List of game odds data or None if request fails
+    """
     params = {
         "apiKey": api_key,
         "oddsFormat": "decimal",
         "markets": markets,
         "regions": regions
     }
-    response = requests.get(base_url, params=params)
-    if response.status_code == 200:
+    
+    try:
+        response = requests.get(base_url, params=params, timeout=10)
+        response.raise_for_status()
         return response.json()
-    else:
-        print(f"Request to {base_url} failed with status code {response.status_code} and response: {response.text}")
-    return None
+    except requests.RequestException as e:
+        logger.error(f"Request to {base_url} failed: {str(e)}")
+        return None
 
-def format_odds_for_ai(odds_data, sport):
+def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, Any]]:
+    """
+    Fetch player data from TheSportsDB API.
+    
+    Args:
+        api_key: TheSportsDB API key
+        sport: Sport code (e.g., NBA, NFL)
+        
+    Returns:
+        List of player data or empty list if request fails
+    """
+    base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
+    params = {"p": sport.lower()}
+    
+    try:
+        resp = requests.get(base_url, params=params, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("player", [])
+    except requests.RequestException as e:
+        logger.error(f"TheSportsDB request failed: {str(e)}")
+        return []
+    
+def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
+    """
+    Format odds data into human-readable descriptions for AI analysis.
+    
+    Args:
+        odds_data: List of game odds data
+        sport: Sport code (e.g., NBA, NFL)
+        
+    Returns:
+        List of formatted game descriptions
+    """
     game_descriptions = []
+    
     for game in odds_data:
         home_team = game.get("home_team")
         away_team = game.get("away_team")
+        commence_time = game.get("commence_time", "")
+        
         if not home_team or not away_team:
             continue
+            
+        # Add game time if available
+        game_time = ""
+        if commence_time:
+            try:
+                dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
+                game_time = f" on {dt.strftime('%Y-%m-%d at %H:%M UTC')}"
+            except ValueError:
+                pass
+            
         if game.get("bookmakers"):
             bookmaker = game["bookmakers"][0]
+            bookmaker_name = bookmaker.get("title", "Unknown Bookmaker")
+            
             for market in bookmaker.get("markets", []):
                 if market["key"] == "h2h":
                     outcomes = market.get("outcomes", [])
                     if len(outcomes) >= 2:
                         home_odds = next((o.get("price") for o in outcomes if o.get("name") == home_team), None)
                         away_odds = next((o.get("price") for o in outcomes if o.get("name") == away_team), None)
+                        
                         if home_odds and away_odds:
                             game_descriptions.append(
-                                f"{sport}: {home_team} vs {away_team} | Home Odds: {home_odds}, Away Odds: {away_odds}"
+                                f"{sport}: {home_team} vs {away_team}{game_time} | Home Odds: {home_odds}, Away Odds: {away_odds} | Source: {bookmaker_name}"
                             )
+    
     return game_descriptions
 
-def format_player_odds_for_ai(odds_data, sport):
+def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
+    """
+    Format player prop bet data into human-readable descriptions for AI analysis.
+    
+    Args:
+        odds_data: List of player odds data
+        sport: Sport code (e.g., NBA, NFL)
+        
+    Returns:
+        List of formatted player bet descriptions
+    """
     player_descriptions = []
+    
     for game in odds_data:
+        home_team = game.get("home_team", "")
+        away_team = game.get("away_team", "")
+        matchup = f"{home_team} vs {away_team}" if home_team and away_team else ""
+        
         if "player_props" not in game:
             continue
+            
         for player in game["player_props"]:
             name = player.get("name")
             bet_type = player.get("type")
             odds = player.get("price")
+            line = player.get("line")
+            
             if name and bet_type and odds:
-                player_descriptions.append(f"{sport}: {name} - {bet_type} | Odds: {odds}")
+                line_str = f" ({line})" if line else ""
+                match_str = f" in {matchup}" if matchup else ""
+                player_descriptions.append(
+                    f"{sport}: {name} - {bet_type}{line_str}{match_str} | Odds: {odds}"
+                )
+                
     return player_descriptions
 
-def get_sport_hint(descriptions):
+def get_sport_hint(descriptions: List[str]) -> str:
+    """
+    Extract sport code from a list of game descriptions.
+    
+    Args:
+        descriptions: List of formatted game descriptions
+        
+    Returns:
+        Sport code or empty string if not found
+    """
     for desc in descriptions:
         if ":" in desc:
             return desc.split(":", 1)[0].strip()
     return ""
 
-def generate_best_pick_with_ai(game_descriptions):
+def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Format games data for frontend display.
+    
+    Args:
+        games_data: Raw games data from API
+        
+    Returns:
+        Formatted games data for the frontend
+    """
+    formatted_games = []
+    
+    for game in games_data:
+        try:
+            formatted_game = {
+                "id": game.get("id", ""),
+                "sport": game.get("sport", "Unknown"),
+                "homeTeam": game.get("home_team", "Unknown"),
+                "awayTeam": game.get("away_team", "Unknown"),
+                "date": format_datetime(game.get("commence_time", "")),
+                "raw_date": game.get("commence_time", ""),
+            }
+            
+            # Add odds information if available
+            if game.get("bookmakers") and len(game["bookmakers"]) > 0:
+                bookmaker = game["bookmakers"][0]
+                for market in bookmaker.get("markets", []):
+                    if market["key"] == "h2h":
+                        outcomes = market.get("outcomes", [])
+                        for outcome in outcomes:
+                            if outcome.get("name") == game.get("home_team"):
+                                formatted_game["homeOdds"] = outcome.get("price")
+                            elif outcome.get("name") == game.get("away_team"):
+                                formatted_game["awayOdds"] = outcome.get("price")
+            
+            formatted_games.append(formatted_game)
+        except Exception as e:
+            logger.warning(f"Error formatting game data: {str(e)}")
+    
+    return formatted_games
+
+def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, str], Dict[str, Any]]:
+    """
+    Generate the best straight bet recommendation using AI.
+    
+    Args:
+        game_descriptions: List of formatted game descriptions
+        
+    Returns:
+        Dictionary with recommendation details or error message
+    """
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
+        
     sport_hint = get_sport_hint(game_descriptions)
-    sport_line = f"The sport is {sport_hint}." if sport_hint else ""
+    sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
+    sport_line = f"The sport is {sport_display}." if sport_display else ""
+    
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific straight bet that you consider the best. "
         "DO NOT choose a bet solely based on high odds. Evaluate matchup context, team performance, injuries, and risk factors. "
         "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
-        '{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Your reasoning]"}\n\n'
+        '{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Your reasoning]", "confidence": [0-100]}\n\n'
         + sport_line + "\n" + "\n".join(game_descriptions)
     )
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        temperature=0,
-        max_tokens=300,
-        messages=[
-            {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    rec_text = response["choices"][0]["message"]["content"].strip()
-    rec_json = None
+    
     try:
-        rec_json = json.loads(rec_text)
-    except:
-        rec_json = extract_json(rec_text)
-    if not rec_json:
-        return {"error": f"JSON parsing error in straight bet response. Response was: {rec_text}"}
-    return f"Sport: {rec_json['sport']} - Bet: {rec_json['bet']}. Explanation: {rec_json['explanation']}"
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            temperature=0,
+            max_tokens=400,
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        rec_text = response["choices"][0]["message"]["content"].strip()
+        
+        # Try to parse as JSON
+        try:
+            rec_json = json.loads(rec_text)
+        except json.JSONDecodeError:
+            rec_json = extract_json(rec_text)
+            
+        if not rec_json:
+            logger.error(f"JSON parsing error in straight bet response: {rec_text}")
+            return {"error": f"Could not parse AI recommendation"}
+            
+        confidence = rec_json.get('confidence', 75)  # Default to 75% if not provided
+        
+        return {
+            "recommendation": f"{rec_json['bet']}",
+            "explanation": rec_json['explanation'],
+            "confidence": confidence,
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"AI request failed for best pick: {str(e)}")
+        return {"error": f"AI analysis failed: {str(e)}"}
 
-def generate_best_parlay_with_ai(game_descriptions):
+def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]:
+    """
+    Generate the best parlay bet recommendation using AI.
+    
+    Args:
+        game_descriptions: List of formatted game descriptions
+        
+    Returns:
+        Dictionary with recommendation info or error message
+    """
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
+        
     sport_hint = get_sport_hint(game_descriptions)
-    sport_line = f"The sport is {sport_hint}." if sport_hint else ""
+    sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
+    sport_line = f"The sport is {sport_display}." if sport_display else ""
+    
     prompt = (
         "You are an expert sports betting assistant. Analyze the following games and choose one specific parlay bet that you consider the best. "
-        "DO NOT choose a parlay solely because it includes bets with the highest odds. Consider matchups, risk distribution, and overall value. "
+        "Choose 2-3 teams for a parlay with good value. DO NOT choose a parlay solely because it includes bets with the highest odds. "
+        "Consider matchups, risk distribution, and overall value. "
         "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
-        '{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Your reasoning]"}\n\n'
+        '{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Your reasoning]", "confidence": [0-100]}\n\n'
         + sport_line + "\n" + "\n".join(game_descriptions)
     )
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        temperature=0,
-        max_tokens=300,
-        messages=[
-            {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    rec_text = response["choices"][0]["message"]["content"].strip()
-    rec_json = None
+    
     try:
-        rec_json = json.loads(rec_text)
-    except:
-        rec_json = extract_json(rec_text)
-    if not rec_json:
-        return {"error": f"JSON parsing error in parlay response. Response was: {rec_text}"}
-    return f"Sport: {rec_json['sport']} - Parlay: {rec_json['parlay']}. Explanation: {rec_json['explanation']}"
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            temperature=0,
+            max_tokens=400,
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        rec_text = response["choices"][0]["message"]["content"].strip()
+        
+        # Try to parse as JSON
+        try:
+            rec_json = json.loads(rec_text)
+        except json.JSONDecodeError:
+            rec_json = extract_json(rec_text)
+            
+        if not rec_json:
+            logger.error(f"JSON parsing error in parlay response: {rec_text}")
+            return {"error": "Could not parse AI recommendation"}
+            
+        confidence = rec_json.get('confidence', 65)  # Default to 65% for parlays
+        
+        return {
+            "recommendation": f"{rec_json['parlay']}",
+            "explanation": rec_json['explanation'],
+            "confidence": confidence,
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"AI request failed for best parlay: {str(e)}")
+        return {"error": f"AI analysis failed: {str(e)}"}
 
-def generate_best_player_bet_with_ai(player_descriptions):
+def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str, Any]:
+    """
+    Generate the best player prop bet recommendation using AI.
+    
+    Args:
+        player_descriptions: List of formatted player descriptions
+        
+    Returns:
+        Dictionary with recommendation info or error message
+    """
     if not player_descriptions:
         return {"error": "Player prop bets are unavailable for this sport."}
+        
     sport_hint = get_sport_hint(player_descriptions)
-    sport_line = f"The sport is {sport_hint}." if sport_hint else ""
+    sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
+    sport_line = f"The sport is {sport_display}." if sport_display else ""
+    
     prompt = (
         "You are an expert sports betting assistant. Analyze the following player-specific betting options and choose one specific player bet that you consider the best. "
         "DO NOT select a bet solely based on high odds; consider player performance, matchup context, and overall value. "
         "Return ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:\n"
-        '{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Your reasoning]"}\n\n'
+        '{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Your reasoning]", "confidence": [0-100]}\n\n'
         + sport_line + "\n" + "\n".join(player_descriptions)
     )
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        temperature=0,
-        max_tokens=300,
-        messages=[
-            {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    rec_text = response["choices"][0]["message"]["content"].strip()
-    rec_json = None
+    
     try:
-        rec_json = json.loads(rec_text)
-    except:
-        rec_json = extract_json(rec_text)
-    if not rec_json:
-        return {"error": f"JSON parsing error in player bet response. Response was: {rec_text}"}
-    return f"Sport: {rec_json['sport']} - Player Bet: {rec_json['player_bet']}. Explanation: {rec_json['explanation']}"
-
-# New fetch from TheSportsDB remains unchanged
-def fetch_player_data_thesportsdb(api_key, sport):
-    base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
-    params = {"p": sport.lower()}  
-    resp = requests.get(base_url, params=params)
-    if resp.status_code == 200:
-        return resp.json().get("player", [])
-    else:
-        print(f"TheSportsDB request failed: {resp.status_code}, {resp.text}")
-    return []
-
-# --- Endpoints ---
-
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            temperature=0,
+            max_tokens=400,
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting assistant. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        rec_text = response["choices"][0]["message"]["content"].strip()
+        
+        # Try to parse as JSON
+        try:
+            rec_json = json.loads(rec_text)
+        except json.JSONDecodeError:
+            rec_json = extract_json(rec_text)
+            
+        if not rec_json:
+            logger.error(f"JSON parsing error in player bet response: {rec_text}")
+            return {"error": "Could not parse AI recommendation"}
+            
+        confidence = rec_json.get('confidence', 70)  # Default to 70% for player props
+        
+        return {
+            "recommendation": f"{rec_json['player_bet']}",
+            "explanation": rec_json['explanation'],
+            "confidence": confidence,
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"AI request failed for best player bet: {str(e)}")
+        return {"error": f"AI analysis failed: {str(e)}"}
+    
 @app.get("/games")
-def get_games(sport: str = Query(None, description="Sport code")):
+async def get_games(
+    sport: str = Query(None, description="Sport code (e.g., NBA, NFL)")
+):
+    """
+    Get upcoming games and their odds.
+    
+    Args:
+        sport: Optional sport code to filter results
+        
+    Returns:
+        List of games with odds data or error message
+    """
+    # Verify API keys
+    verify_api_keys()
+    
+    cache_key = f"games:{sport or 'all'}"
+    
+    # Check if we have cached data
+    if cache_key in games_cache:
+        logger.info(f"Returning cached games data for {sport or 'all sports'}")
+        return games_cache[cache_key]
+    
     if sport:
         sp = sport.upper()
         url = SPORTS_BASE_URLS.get(sp)
         if not url:
-            return {"error":"Sport not supported."}
+            return {"error": f"Sport not supported: {sport}"}
+            
         data = fetch_odds(API_KEY, url)
         if not data:
-            return {"error":f"No games found for {sp}."}
+            return {"error": f"No games found for {sp}."}
+            
         for g in data:
             g["sport"] = sp
-        return data
+        
+        formatted_data = format_games_response(data)
+        games_cache[cache_key] = formatted_data
+        return formatted_data
+    
+    # If no sport specified, get all games
     all_games = []
     for sp, url in SPORTS_BASE_URLS.items():
         data = fetch_odds(API_KEY, url)
@@ -249,78 +577,227 @@ def get_games(sport: str = Query(None, description="Sport code")):
             for g in data:
                 g["sport"] = sp
             all_games.extend(data)
-    return all_games if all_games else {"error":"No games found."}
+    
+    formatted_data = format_games_response(all_games)
+    games_cache[cache_key] = formatted_data
+    return formatted_data if formatted_data else {"error": "No games found."}
 
 @app.get("/best-pick")
-def get_best_pick():
+async def get_best_pick():
+    """
+    Get the best straight bet recommendation across all sports.
+    
+    Returns:
+        Dictionary with best pick recommendation
+    """
+    # Verify API keys
+    verify_api_keys()
+    
+    cache_key = "best_pick:all"
+    
+    # Check if we have cached data
+    if cache_key in bets_cache:
+        logger.info("Returning cached best pick recommendation")
+        return {"best_pick": bets_cache[cache_key]}
+        
     all_desc = []
     for sp, url in SPORTS_BASE_URLS.items():
         data = fetch_odds(API_KEY, url)
         if data:
             all_desc += format_odds_for_ai(data, sp)
-    return {"best_pick": generate_best_pick_with_ai(all_desc)}
+    
+    result = generate_best_pick_with_ai(all_desc)
+    bets_cache[cache_key] = result
+    return {"best_pick": result}
 
 @app.get("/best-parlay")
-def get_best_parlay():
+async def get_best_parlay():
+    """
+    Get the best parlay bet recommendation across all sports.
+    
+    Returns:
+        Dictionary with best parlay recommendation
+    """
+    # Verify API keys
+    verify_api_keys()
+    
+    cache_key = "best_parlay:all"
+    
+    # Check if we have cached data
+    if cache_key in bets_cache:
+        logger.info("Returning cached best parlay recommendation")
+        return {"best_parlay": bets_cache[cache_key]}
+        
     all_desc = []
     for sp, url in SPORTS_BASE_URLS.items():
         data = fetch_odds(API_KEY, url)
         if data:
             all_desc += format_odds_for_ai(data, sp)
-    return {"best_parlay": generate_best_parlay_with_ai(all_desc)}
+    
+    result = generate_best_parlay_with_ai(all_desc)
+    bets_cache[cache_key] = result
+    return {"best_parlay": result}
 
 @app.get("/sport-best-pick")
-def get_sport_best_pick(sport: str = Query(..., description="Sport code")):
+async def get_sport_best_pick(
+    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
+):
+    """
+    Get the best straight bet recommendation for a specific sport.
+    
+    Args:
+        sport: Sport code to get recommendations for
+        
+    Returns:
+        Dictionary with best pick recommendation for the sport
+    """
+    # Verify API keys
+    verify_api_keys()
+    
+    cache_key = f"best_pick:{sport}"
+    
+    # Check if we have cached data
+    if cache_key in bets_cache:
+        logger.info(f"Returning cached best pick for {sport}")
+        return {"sport_best_pick": bets_cache[cache_key]}
+        
     sp = sport.upper()
     url = SPORTS_BASE_URLS.get(sp)
     if not url:
-        return {"error":"Sport not supported."}
+        return {"error": f"Sport not supported: {sport}"}
+        
     data = fetch_odds(API_KEY, url)
     if not data:
-        return {"error":f"No games found for {sp}."}
-    return {"sport_best_pick": generate_best_pick_with_ai(format_odds_for_ai(data, sp))}
+        return {"error": f"No games found for {sp}."}
+    
+    result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
+    bets_cache[cache_key] = result
+    return {"sport_best_pick": result}
 
 @app.get("/sport-best-parlay")
-def get_sport_best_parlay(sport: str = Query(..., description="Sport code")):
+async def get_sport_best_parlay(
+    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
+):
+    """
+    Get the best parlay bet recommendation for a specific sport.
+    
+    Args:
+        sport: Sport code to get recommendations for
+        
+    Returns:
+        Dictionary with best parlay recommendation for the sport
+    """
+    # Verify API keys
+    verify_api_keys()
+    
+    cache_key = f"best_parlay:{sport}"
+    
+    # Check if we have cached data
+    if cache_key in bets_cache:
+        logger.info(f"Returning cached best parlay for {sport}")
+        return {"sport_best_parlay": bets_cache[cache_key]}
+        
     sp = sport.upper()
     url = SPORTS_BASE_URLS.get(sp)
     if not url:
-        return {"error":"Sport not supported."}
+        return {"error": f"Sport not supported: {sport}"}
+        
     data = fetch_odds(API_KEY, url)
     if not data:
-        return {"error":f"No games found for {sp}."}
-    return {"sport_best_parlay": generate_best_parlay_with_ai(format_odds_for_ai(data, sp))}
+        return {"error": f"No games found for {sp}."}
+        
+    result = generate_best_parlay_with_ai(format_odds_for_ai(data, sp))
+    bets_cache[cache_key] = result
+    return {"sport_best_parlay": result}
 
 @app.get("/player-best-bet")
-async def get_player_best_bet(sport: str = Query(..., description="Sport code")):
+async def get_player_best_bet(
+    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
+):
+    """
+    Get the best player prop bet recommendation for a specific sport.
+    
+    Args:
+        sport: Sport code to get recommendations for
+        
+    Returns:
+        Dictionary with best player bet recommendation
+    """
+    # Verify API keys
+    verify_api_keys()
+    
+    if sport.upper() == "OVERALL":
+        return {"best_player_bet": "Please select a specific sport for player prop bets."}
+        
+    cache_key = f"best_player_bet:{sport}"
+    
+    # Check if we have cached data
+    if cache_key in bets_cache:
+        logger.info(f"Returning cached best player bet for {sport}")
+        return {"best_player_bet": bets_cache[cache_key]}
+        
     sp = sport.upper()
     base_url = SPORTS_BASE_URLS.get(sp)
     if not base_url:
-        return {"best_player_bet": "Sport not supported."}
-
+        return {"best_player_bet": f"Sport not supported: {sport}"}
+    
     # 1) Try real player_props from Odds API
     odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
     player_descriptions = format_player_odds_for_ai(odds_data or [], sp)
-
+    
     # 2) If none, fallback to TheSportsDB
     if not player_descriptions:
+        logger.info(f"No player props from odds API for {sport}, trying TheSportsDB")
         thesports = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sp)
         for p in thesports:
             if isinstance(p, dict):
                 name = p.get("strPlayer")
-                pos  = p.get("strPosition")
+                pos = p.get("strPosition")
                 if name and pos:
                     player_descriptions.append(f"{sp}: {name} - Position: {pos}")
-
+    
     # 3) If still none, report unavailable
     if not player_descriptions:
-        return {"best_player_bet": "Player prop bets are unavailable for this sport."}
+        return {"best_player_bet": f"Player prop bets are unavailable for {sport}."}
+        
+    result = generate_best_player_bet_with_ai(player_descriptions)
+    bets_cache[cache_key] = result
+    return {"best_player_bet": result}
 
-    return {"best_player_bet": generate_best_player_bet_with_ai(player_descriptions)}
+@app.get("/available-sports")
+async def get_available_sports():
+    """
+    Get list of available sports with their codes and display names.
+    
+    Returns:
+        List of sport codes and display names
+    """
+    return [
+        {"code": "Overall", "name": "All Sports"},
+        *[{"code": code, "name": display} for code, display in SPORT_DISPLAY_NAMES.items()]
+    ]
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the Sports Betting API!"}
+    """
+    Root endpoint - welcome message.
+    
+    Returns:
+        Welcome message
+    """
+    return {
+        "message": "Welcome to the Sports Betting API!",
+        "version": "1.0.0",
+        "endpoints": [
+            "/games", 
+            "/best-pick", 
+            "/best-parlay", 
+            "/sport-best-pick", 
+            "/sport-best-parlay", 
+            "/player-best-bet",
+            "/available-sports"
+        ]
+    }
 
 if __name__ == "__main__":
-    uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
