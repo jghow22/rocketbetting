@@ -70,9 +70,6 @@ if OPENAI_API_KEY:
 if THESPORTSDB_API_KEY:
     logger.info(f"Using TheSportsDB API key: {THESPORTSDB_API_KEY[:5]}*****")
 
-# Set OpenAI API key
-openai.api_key = OPENAI_API_KEY
-
 # Define available sports and their endpoints
 SPORTS_BASE_URLS: Dict[str, str] = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
@@ -371,7 +368,9 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
     )
     
     try:
-        response = openai.ChatCompletion.create(
+        # New OpenAI API format
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0,
             max_tokens=400,
@@ -381,7 +380,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
             ]
         )
         
-        rec_text = response["choices"][0]["message"]["content"].strip()
+        rec_text = response.choices[0].message.content.strip()
         
         # Try to parse as JSON
         try:
@@ -433,7 +432,9 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
     )
     
     try:
-        response = openai.ChatCompletion.create(
+        # New OpenAI API format
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0,
             max_tokens=400,
@@ -443,7 +444,7 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
             ]
         )
         
-        rec_text = response["choices"][0]["message"]["content"].strip()
+        rec_text = response.choices[0].message.content.strip()
         
         # Try to parse as JSON
         try:
@@ -494,7 +495,9 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
     )
     
     try:
-        response = openai.ChatCompletion.create(
+        # New OpenAI API format
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0,
             max_tokens=400,
@@ -504,7 +507,7 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
             ]
         )
         
-        rec_text = response["choices"][0]["message"]["content"].strip()
+        rec_text = response.choices[0].message.content.strip()
         
         # Try to parse as JSON
         try:
@@ -800,4 +803,4 @@ def read_root():
     }
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
