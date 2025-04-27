@@ -214,7 +214,7 @@ def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, An
     except requests.RequestException as e:
         logger.error(f"TheSportsDB request failed: {str(e)}")
         return []
-    
+
 def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
     """
     Format odds data with enhanced context for better AI analysis.
@@ -395,6 +395,150 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
     
     return formatted_games
 
+def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, str], Dict[str, Any]]:
+    """
+    Generate the best straight bet recommendation using enhanced AI analysis.
+    
+    Args:
+        game_descriptions: List of formatted game descriptions
+        
+    Returns:
+        Dictionary with recommendation details or error message
+    """
+    if not game_descriptions:
+        return {"error": "No valid games to analyze."}
+        
+    sport_hint = get_sport_hint(game_descriptions)
+    sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
+    sport_line = f"The sport is {sport_display}." if sport_display else ""
+    
+    prompt = (
+        "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
+        "Analyze the following games and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
+        "\n\nIn your analysis, consider the following factors, in order of importance:"
+        "\n1. Recent team performance and momentum (last 5-10 games)"
+        "\n2. Head-to-head matchups between the teams this season"
+        "\n3. Key player availability (injuries, rest days, etc.)"
+        "\n4. Home/away performance disparities"
+        "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
+        "\n6. Statistical matchups and advantages"
+        "\n7. Value compared to the offered odds"
+        "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
+        '\n{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Detailed reasoning with specific data points]", "confidence": [0-100]}'
+        "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
+        "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
+    )
+    
+    try:
+        # New OpenAI API format
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            temperature=0,
+            max_tokens=500,  # Increased token limit for more detailed analysis
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting analyst. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        rec_text = response.choices[0].message.content.strip()
+        
+        # Try to parse as JSON
+        try:
+            rec_json = json.loads(rec_text)
+        except json.JSONDecodeError:
+            rec_json = extract_json(rec_text)
+            
+        if not rec_json:
+            logger.error(f"JSON parsing error in straight bet response: {rec_text}")
+            return {"error": f"Could not parse AI recommendation"}
+            
+        confidence = rec_json.get('confidence', 75)  # Default to 75% if not provided
+        
+        return {
+            "recommendation": f"{rec_json['bet']}",
+            "explanation": rec_json['explanation'],
+            "confidence": confidence,
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"AI request failed for best pick: {str(e)}")
+        return {"error": f"AI analysis failed: {str(e)}"}
+
+def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]:
+    """
+    Generate the best parlay bet recommendation using enhanced AI analysis.
+    
+    Args:
+        game_descriptions: List of formatted game descriptions
+        
+    Returns:
+        Dictionary with recommendation info or error message
+    """
+    if not game_descriptions:
+        return {"error": "No valid games to analyze."}
+        
+    sport_hint = get_sport_hint(game_descriptions)
+    sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
+    sport_line = f"The sport is {sport_display}." if sport_display else ""
+    
+    prompt = (
+        "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
+        "Analyze the following games and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
+        "\n\nIn your analysis, consider the following factors for EACH game in your parlay:"
+        "\n1. Recent team performance and momentum (last 5-10 games)"
+        "\n2. Head-to-head matchups between the teams this season"
+        "\n3. Key player availability (injuries, rest days, etc.)"
+        "\n4. Home/away performance disparities"
+        "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
+        "\n6. Statistical matchups and advantages"
+        "\n7. Diversification of risk (avoid multiple games with similar risk profiles)"
+        "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
+        '\n{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Detailed reasoning with specific data points for EACH pick]", "confidence": [0-100]}'
+        "\n\nNote: Parlay confidence should generally be lower than straight bets due to compounding risk. Only assign confidence scores above 70 in extraordinary circumstances."
+        "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
+    )
+    
+    try:
+        # New OpenAI API format
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            temperature=0,
+            max_tokens=600,  # Increased for more detailed analysis
+            messages=[
+                {"role": "system", "content": "You are an expert sports betting analyst. Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        rec_text = response.choices[0].message.content.strip()
+        
+        # Try to parse as JSON
+        try:
+            rec_json = json.loads(rec_text)
+        except json.JSONDecodeError:
+            rec_json = extract_json(rec_text)
+            
+        if not rec_json:
+            logger.error(f"JSON parsing error in parlay response: {rec_text}")
+            return {"error": "Could not parse AI recommendation"}
+            
+        confidence = rec_json.get('confidence', 65)  # Default to 65% for parlays
+        
+        return {
+            "recommendation": f"{rec_json['parlay']}",
+            "explanation": rec_json['explanation'],
+            "confidence": confidence,
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"AI request failed for best parlay: {str(e)}")
+        return {"error": f"AI analysis failed: {str(e)}"}
+
 def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str, Any]:
     """
     Generate the best player prop bet recommendation using enhanced AI analysis.
@@ -466,79 +610,7 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
     except Exception as e:
         logger.error(f"AI request failed for best player bet: {str(e)}")
         return {"error": f"AI analysis failed: {str(e)}"}
-    
-def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str, Any]:
-    """
-    Generate the best player prop bet recommendation using enhanced AI analysis.
-    
-    Args:
-        player_descriptions: List of formatted player descriptions
-        
-    Returns:
-        Dictionary with recommendation info or error message
-    """
-    if not player_descriptions:
-        return {"error": "Player prop bets are unavailable for this sport."}
-        
-    sport_hint = get_sport_hint(player_descriptions)
-    sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
-    sport_line = f"The sport is {sport_display}." if sport_display else ""
-    
-    prompt = (
-        "You are an expert sports betting analyst specializing in player performance statistics and trends. "
-        "Analyze the following player prop betting options and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
-        "\n\nIn your analysis, consider the following factors, in order of importance:"
-        "\n1. Player's recent performance trend (last 5-10 games)"
-        "\n2. Player's performance against this specific opponent historically"
-        "\n3. Player's role in current team strategy"
-        "\n4. Matchup advantages/disadvantages (defensive matchups, etc.)"
-        "\n5. Situational factors (minutes restrictions, injuries to teammates, etc.)"
-        "\n6. Statistical anomalies that may regress to the mean"
-        "\n7. Value compared to the offered odds"
-        "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
-        '\n{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Detailed reasoning with specific statistical evidence]", "confidence": [0-100]}'
-        "\n\nYour explanation must include specific statistical data and clear reasoning."
-        "\n\n" + sport_line + "\n" + "\n".join(player_descriptions)
-    )
-    
-    try:
-        # New OpenAI API format
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            temperature=0,
-            max_tokens=500,  # Increased for more detailed analysis
-            messages=[
-                {"role": "system", "content": "You are an expert sports betting analyst. Respond ONLY with the valid JSON object in the exact format."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        rec_text = response.choices[0].message.content.strip()
-        
-        # Try to parse as JSON
-        try:
-            rec_json = json.loads(rec_text)
-        except json.JSONDecodeError:
-            rec_json = extract_json(rec_text)
-            
-        if not rec_json:
-            logger.error(f"JSON parsing error in player bet response: {rec_text}")
-            return {"error": "Could not parse AI recommendation"}
-            
-        confidence = rec_json.get('confidence', 70)  # Default to 70% for player props
-        
-        return {
-            "recommendation": f"{rec_json['player_bet']}",
-            "explanation": rec_json['explanation'],
-            "confidence": confidence,
-            "last_updated": datetime.now(timezone.utc).isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"AI request failed for best player bet: {str(e)}")
-        return {"error": f"AI analysis failed: {str(e)}"}   
-    
+
 @app.get("/games")
 async def get_games(
     sport: str = Query(None, description="Sport code (e.g., NBA, NFL)")
