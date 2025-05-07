@@ -210,13 +210,9 @@ def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, An
     try:
         resp = requests.get(base_url, params=params, timeout=10)
         resp.raise_for_status()
-        data = resp.json()
-        return data.get("player", []) or []  # Return empty list if player is None
+        return resp.json().get("player", [])
     except requests.RequestException as e:
         logger.error(f"TheSportsDB request failed: {str(e)}")
-        return []
-    except (ValueError, KeyError) as e:
-        logger.error(f"Error parsing TheSportsDB response: {str(e)}")
         return []
 
 def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
@@ -835,27 +831,20 @@ async def get_player_best_bet(
     if not player_descriptions:
         logger.info(f"No player props from odds API for {sport}, trying TheSportsDB")
         thesports = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sp)
-        # Make sure thesports is not None before iterating
-        if thesports:
-            for p in thesports:
-                if isinstance(p, dict):
-                    name = p.get("strPlayer")
-                    pos = p.get("strPosition")
-                    if name and pos:
-                        player_descriptions.append(f"{sp}: {name} - Position: {pos}")
+        for p in thesports:
+            if isinstance(p, dict):
+                name = p.get("strPlayer")
+                pos = p.get("strPosition")
+                if name and pos:
+                    player_descriptions.append(f"{sp}: {name} - Position: {pos}")
     
     # 3) If still none, report unavailable
     if not player_descriptions:
         return {"best_player_bet": f"Player prop bets are unavailable for {sport}."}
-    
-    # Generate AI recommendation    
-    try:
-        result = generate_best_player_bet_with_ai(player_descriptions)
-        bets_cache[cache_key] = result
-        return {"best_player_bet": result}
-    except Exception as e:
-        logger.error(f"Error generating player bet for {sport}: {str(e)}")
-        return {"best_player_bet": f"Unable to generate player bet recommendation for {sport}."}
+        
+    result = generate_best_player_bet_with_ai(player_descriptions)
+    bets_cache[cache_key] = result
+    return {"best_player_bet": result}
 
 @app.get("/available-sports")
 async def get_available_sports():
