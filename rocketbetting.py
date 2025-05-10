@@ -718,9 +718,9 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
                     "sport": result["sport"],
                     "recommendation": result["recommendation"],
                     "confidence": result["confidence"],
-                    "explanation": result["explanation"]
+                                        "explanation": result["explanation"]
                 }
-                                prediction_id = sheets_manager.store_prediction(pred_data)
+                prediction_id = sheets_manager.store_prediction(pred_data)
                 if prediction_id:
                     result["prediction_id"] = prediction_id
                     logger.info(f"Successfully stored prediction with ID: {prediction_id}")
