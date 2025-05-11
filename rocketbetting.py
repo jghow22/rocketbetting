@@ -7,10 +7,12 @@ import asyncio
 import json
 import re
 import logging
+import time
 from typing import Dict, List, Optional, Union, Any
 from datetime import datetime, timezone
 import uuid
 import traceback
+from functools import lru_cache
 
 # Google Sheets Integration
 import gspread
@@ -52,6 +54,8 @@ class SheetsManager:
         self.spreadsheet_id = spreadsheet_id or os.getenv("SPREADSHEET_ID")
         self.credentials_path = credentials_path
         self.credentials_json = credentials_json or os.getenv("GOOGLE_CREDENTIALS_JSON")
+        self.spreadsheet = None
+        self.worksheet_cache = {}
         
         logger.info(f"Initializing SheetsManager with spreadsheet ID: {self.spreadsheet_id}")
         
@@ -94,14 +98,18 @@ class SheetsManager:
             self.client = gspread.authorize(credentials)
             logger.info("Successfully connected to Google Sheets")
             
-            # Test connection by accessing the spreadsheet
+            # Cache the spreadsheet reference for future use
             try:
-                spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-                worksheet_names = [ws.title for ws in spreadsheet.worksheets()]
+                self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+                worksheet_names = [ws.title for ws in self.spreadsheet.worksheets()]
                 logger.info(f"Successfully accessed spreadsheet. Available worksheets: {worksheet_names}")
+                # Pre-cache all worksheet references to reduce API calls
+                for ws_name in worksheet_names:
+                    self.worksheet_cache[ws_name] = self.spreadsheet.worksheet(ws_name)
             except Exception as e:
                 logger.error(f"Could access credentials but failed to open spreadsheet: {str(e)}")
                 logger.error(traceback.format_exc())
+                return False
                 
             return True
         except Exception as e:
@@ -110,20 +118,43 @@ class SheetsManager:
             return False
     
     def get_sheet(self, sheet_name):
-        """Get a specific worksheet"""
+        """Get a specific worksheet with caching and retries"""
         if not self.client or not self.spreadsheet_id:
             logger.error("Google Sheets client not properly initialized")
             return None
             
-        try:
-            # Open the spreadsheet
-            spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-            worksheet = spreadsheet.worksheet(sheet_name)
-            return worksheet
-        except Exception as e:
-            logger.error(f"Error accessing Google Sheet {sheet_name}: {str(e)}")
-            logger.error(traceback.format_exc())
-            return None
+        # Check if we already have this worksheet cached
+        if sheet_name in self.worksheet_cache:
+            return self.worksheet_cache[sheet_name]
+            
+        # Try to get the worksheet with retries
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second delay
+        
+        for attempt in range(max_retries):
+            try:
+                if not self.spreadsheet:
+                    self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+                    
+                worksheet = self.spreadsheet.worksheet(sheet_name)
+                # Cache the worksheet for future use
+                self.worksheet_cache[sheet_name] = worksheet
+                return worksheet
+            except gspread.exceptions.APIError as e:
+                if "429" in str(e) and attempt < max_retries - 1:  # Rate limit error
+                    logger.warning(f"Rate limit hit, retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(f"Error accessing Google Sheet {sheet_name}: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    return None
+            except Exception as e:
+                logger.error(f"Error accessing Google Sheet {sheet_name}: {str(e)}")
+                logger.error(traceback.format_exc())
+                return None
+        
+        return None
     
     def store_game(self, game_data):
         """Store a game in the Games sheet"""
@@ -172,6 +203,13 @@ class SheetsManager:
             worksheet.append_row(row)
             logger.info(f"Successfully stored game: {home_team} vs {away_team}")
             return True
+        except gspread.exceptions.APIError as e:
+            if "429" in str(e):  # Rate limit error
+                logger.warning(f"Rate limit hit when storing game, will retry later")
+                return False
+            logger.error(f"Error storing game data: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
         except Exception as e:
             logger.error(f"Error storing game data: {str(e)}")
             logger.error(traceback.format_exc())
@@ -205,6 +243,14 @@ class SheetsManager:
             worksheet.append_row(row)
             logger.info(f"Successfully stored prediction for {sport}: {recommendation}")
             return prediction_id
+        except gspread.exceptions.APIError as e:
+            if "429" in str(e):  # Rate limit error
+                logger.warning(f"Rate limit hit when storing prediction, will retry later")
+                # In a real system, you might queue this for later retry
+                return False
+            logger.error(f"Error storing prediction data: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
         except Exception as e:
             logger.error(f"Error storing prediction data: {str(e)}")
             logger.error(traceback.format_exc())
@@ -239,6 +285,13 @@ class SheetsManager:
             worksheet.append_row(row)
             logger.info(f"Successfully stored player prop for {player_name}: {prop_type}")
             return prop_id
+        except gspread.exceptions.APIError as e:
+            if "429" in str(e):  # Rate limit error
+                logger.warning(f"Rate limit hit when storing player prop, will retry later")
+                return False
+            logger.error(f"Error storing player prop data: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
         except Exception as e:
             logger.error(f"Error storing player prop data: {str(e)}")
             logger.error(traceback.format_exc())
@@ -278,6 +331,13 @@ class SheetsManager:
                 
             logger.info(f"Successfully stored outcome for prediction {prediction_id}: {outcome}")
             return True
+        except gspread.exceptions.APIError as e:
+            if "429" in str(e):  # Rate limit error
+                logger.warning(f"Rate limit hit when storing outcome, will retry later")
+                return False
+            logger.error(f"Error storing outcome data: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
         except Exception as e:
             logger.error(f"Error storing outcome data: {str(e)}")
             logger.error(traceback.format_exc())
@@ -308,6 +368,13 @@ class SheetsManager:
             worksheet.append_row(row)
             logger.info(f"Successfully stored user interaction: {interaction_type}")
             return True
+        except gspread.exceptions.APIError as e:
+            if "429" in str(e):  # Rate limit error
+                logger.warning(f"Rate limit hit when storing user interaction, will retry later")
+                return False
+            logger.error(f"Error storing user interaction data: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
         except Exception as e:
             logger.error(f"Error storing user interaction data: {str(e)}")
             logger.error(traceback.format_exc())
@@ -652,7 +719,7 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
                                 formatted_game["homeOdds"] = outcome.get("price")
                             elif outcome.get("name") == game.get("away_team"):
                                 formatted_game["awayOdds"] = outcome.get("price")
-            formatted_games.append(formatted_game)
+                        formatted_games.append(formatted_game)
         except Exception as e:
             logger.warning(f"Error formatting game data: {str(e)}")
     return formatted_games
@@ -716,7 +783,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         confidence = rec_json.get('confidence', 75)  # Default to 75% if not provided
         
         result = {
-                        "recommendation": f"{rec_json['bet']}",
+            "recommendation": f"{rec_json['bet']}",
             "explanation": rec_json['explanation'],
             "confidence": confidence,
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -966,19 +1033,9 @@ async def get_games(
         if not data:
             return {"error": f"No games found for {sp}."}
             
-        # Store games in Google Sheets
-        if sheets_manager:
-            for g in data:
-                g["sport"] = sp
-                try:
-                    result = sheets_manager.store_game(g)
-                    if result:
-                        logger.info(f"Successfully stored game for {sp}")
-                    else:
-                        logger.warning(f"Failed to store game for {sp}")
-                except Exception as e:
-                    logger.error(f"Error storing game in Google Sheets: {str(e)}")
-                    logger.error(traceback.format_exc())
+        # No need to store all games, just format and return them
+        for g in data:
+            g["sport"] = sp
                     
         formatted_data = format_games_response(data)
         games_cache[cache_key] = formatted_data
@@ -992,19 +1049,6 @@ async def get_games(
             # Add sport to each game
             for g in data:
                 g["sport"] = sp
-                
-                # Store games in Google Sheets
-                if sheets_manager:
-                    try:
-                        result = sheets_manager.store_game(g)
-                        if result:
-                            logger.info(f"Successfully stored game for {sp}")
-                        else:
-                            logger.warning(f"Failed to store game for {sp}")
-                    except Exception as e:
-                        logger.error(f"Error storing game in Google Sheets: {str(e)}")
-                        logger.error(traceback.format_exc())
-                        
             all_games.extend(data)
             
     formatted_data = format_games_response(all_games)
@@ -1032,19 +1076,9 @@ async def get_best_pick():
     for sp, url in SPORTS_BASE_URLS.items():
         data = fetch_odds(API_KEY, url)
         if data:
-            # Store games in Google Sheets
-            if sheets_manager:
-                for game in data:
-                    game["sport"] = sp
-                    try:
-                        result = sheets_manager.store_game(game)
-                        if result:
-                            logger.info(f"Successfully stored game for {sp}")
-                        else:
-                            logger.warning(f"Failed to store game for {sp}")
-                    except Exception as e:
-                        logger.error(f"Error storing game in Google Sheets: {str(e)}")
-                        logger.error(traceback.format_exc())
+            # Don't store games anymore, just process them for AI
+            for game in data:
+                game["sport"] = sp
             
             all_desc += format_odds_for_ai(data, sp)
             all_games.extend(data)
@@ -1073,19 +1107,9 @@ async def get_best_parlay():
     for sp, url in SPORTS_BASE_URLS.items():
         data = fetch_odds(API_KEY, url)
         if data:
-            # Store games in Google Sheets if not already stored by best-pick
-            if sheets_manager:
-                for game in data:
-                    game["sport"] = sp
-                    try:
-                        result = sheets_manager.store_game(game)
-                        if result:
-                            logger.info(f"Successfully stored game for {sp}")
-                        else:
-                            logger.warning(f"Failed to store game for {sp}")
-                    except Exception as e:
-                        logger.error(f"Error storing game in Google Sheets: {str(e)}")
-                        logger.error(traceback.format_exc())
+            # Don't store games anymore, just process them for AI
+            for game in data:
+                game["sport"] = sp
                         
             all_desc += format_odds_for_ai(data, sp)
             
@@ -1122,19 +1146,9 @@ async def get_sport_best_pick(
     if not data:
         return {"error": f"No games found for {sp}."}
         
-    # Store games in Google Sheets
-    if sheets_manager:
-        for game in data:
-            game["sport"] = sp
-            try:
-                result = sheets_manager.store_game(game)
-                if result:
-                    logger.info(f"Successfully stored game for {sp}")
-                else:
-                    logger.warning(f"Failed to store game for {sp}")
-            except Exception as e:
-                logger.error(f"Error storing game in Google Sheets: {str(e)}")
-                logger.error(traceback.format_exc())
+    # Don't store games anymore, just format them for AI
+    for game in data:
+        game["sport"] = sp
     
     result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
     bets_cache[cache_key] = result
@@ -1169,19 +1183,9 @@ async def get_sport_best_parlay(
     if not data:
         return {"error": f"No games found for {sp}."}
         
-    # Store games in Google Sheets if not already stored by sport-best-pick
-    if sheets_manager:
-        for game in data:
-            game["sport"] = sp
-            try:
-                result = sheets_manager.store_game(game)
-                if result:
-                    logger.info(f"Successfully stored game for {sp}")
-                else:
-                    logger.warning(f"Failed to store game for {sp}")
-            except Exception as e:
-                logger.error(f"Error storing game in Google Sheets: {str(e)}")
-                logger.error(traceback.format_exc())
+    # Don't store games anymore, just format them for AI
+    for game in data:
+        game["sport"] = sp
     
     result = generate_best_parlay_with_ai(format_odds_for_ai(data, sp))
     bets_cache[cache_key] = result
@@ -1281,9 +1285,30 @@ def read_root():
             "/available-sports",
             "/clear-cache",
             "/test-sheets-connection",  # New endpoint for testing sheets connection
+            "/check-service-account",   # New endpoint to check service account details
             "/track-interaction"
         ]
     }
+
+# New endpoint to check service account details
+@app.get("/check-service-account")
+async def check_service_account():
+    """Check the service account email from credentials"""
+    if not os.getenv("GOOGLE_CREDENTIALS_JSON"):
+        return {"error": "No credentials JSON found in environment"}
+    
+    try:
+        creds_json = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+        service_account_email = creds_json.get("client_email", "Not found")
+        project_id = creds_json.get("project_id", "Not found")
+        
+        return {
+            "service_account_email": service_account_email,
+            "project_id": project_id,
+            "spreadsheet_id": os.getenv("SPREADSHEET_ID")
+        }
+    except Exception as e:
+        return {"error": f"Failed to parse credentials: {str(e)}"}
 
 # New endpoint for tracking user interactions
 @app.get("/track-interaction")
@@ -1343,19 +1368,24 @@ async def test_sheets_connection():
         worksheet_names = [ws.title for ws in spreadsheet.worksheets()]
         
         # Try to write to a worksheet
-        test_sheet = spreadsheet.worksheet("Games")
-        row = ["TEST", "Connection Test", datetime.now().isoformat()]
-        test_sheet.append_row(row)
+        test_sheet = sheets_manager.get_sheet("Predictions")
+        if test_sheet:
+            row = ["TEST", "Connection Test", datetime.now().isoformat()]
+            test_sheet.append_row(row)
+            message = "Successfully connected to Google Sheets and wrote test data"
+        else:
+            message = "Connected to Google Sheets but couldn't access the Predictions worksheet"
         
         return {
             "status": "success",
-            "message": "Successfully connected to Google Sheets and wrote test data",
+            "message": message,
             "worksheets": worksheet_names
         }
     except Exception as e:
         return {
             "status": "error",
-            "message": f"Error testing connection: {str(e)}"
+            "message": f"Error testing connection: {str(e)}",
+            "error_details": traceback.format_exc()
         }
 
 if __name__ == "__main__":
