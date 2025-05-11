@@ -257,7 +257,7 @@ class SheetsManager:
             return False
     
     def store_player_prop(self, prop_data):
-        """Store a player prop in the Player Props sheet"""
+        """Store a player prop in the Player Props Sheet"""
         worksheet = self.get_sheet("Player Props Sheet")
         if not worksheet:
             logger.error("Could not access Player Props Sheet worksheet")
@@ -344,10 +344,10 @@ class SheetsManager:
             return False
     
     def store_user_interaction(self, interaction_data):
-        """Store a user interaction in the User Interactions sheet"""
-        worksheet = self.get_sheet("User Interactions")
+        """Store a user interaction in the User Interactions Sheet"""
+        worksheet = self.get_sheet("User Interactions Sheet")
         if not worksheet:
-            logger.error("Could not access User Interactions worksheet")
+            logger.error("Could not access User Interactions Sheet worksheet")
             return False
         
         try:
