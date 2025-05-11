@@ -46,21 +46,23 @@ logger = logging.getLogger(__name__)
 
 # Google Sheets Manager class
 class SheetsManager:
-    def __init__(self, credentials_path=None, spreadsheet_id=None):
+    def __init__(self, credentials_path=None, credentials_json=None, spreadsheet_id=None):
         """Initialize Google Sheets manager"""
         self.client = None
         self.spreadsheet_id = spreadsheet_id or os.getenv("SPREADSHEET_ID")
-        self.credentials_path = credentials_path or os.getenv("GOOGLE_CREDENTIALS_PATH")
+        self.credentials_path = credentials_path
+        self.credentials_json = credentials_json or os.getenv("GOOGLE_CREDENTIALS_JSON")
         
         logger.info(f"Initializing SheetsManager with spreadsheet ID: {self.spreadsheet_id}")
-        logger.info(f"Using credentials path: {self.credentials_path}")
         
         if not self.spreadsheet_id:
             logger.error("SPREADSHEET_ID environment variable not set")
-        if not self.credentials_path:
-            logger.error("GOOGLE_CREDENTIALS_PATH environment variable not set")
-        else:
-            # Check if file exists
+        
+        if not self.credentials_path and not self.credentials_json:
+            logger.error("No credentials provided - need either path or JSON content")
+        elif self.credentials_json:
+            logger.info("Found credentials JSON in environment")
+        elif self.credentials_path:
             if not os.path.exists(self.credentials_path):
                 logger.error(f"Credentials file not found at: {self.credentials_path}")
         
@@ -69,15 +71,26 @@ class SheetsManager:
         
     def connect(self):
         """Connect to Google Sheets API"""
-        if not self.credentials_path:
-            logger.error("Google credentials path not provided")
-            return False
-            
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         
         try:
-            logger.info(f"Attempting to connect to Google Sheets with credentials from: {self.credentials_path}")
-            credentials = ServiceAccountCredentials.from_json_keyfile_name(self.credentials_path, scope)
+            if self.credentials_path and os.path.exists(self.credentials_path):
+                logger.info(f"Using credentials file from: {self.credentials_path}")
+                credentials = ServiceAccountCredentials.from_json_keyfile_name(self.credentials_path, scope)
+            elif self.credentials_json:
+                logger.info("Using credentials from environment variable")
+                # Parse JSON from string
+                try:
+                    json_dict = json.loads(self.credentials_json)
+                    credentials = ServiceAccountCredentials.from_json_keyfile_dict(json_dict, scope)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse credentials JSON: {str(e)}")
+                    logger.error(f"First 100 chars of JSON: {self.credentials_json[:100]}...")
+                    return False
+            else:
+                logger.error("No valid credentials provided")
+                return False
+                
             self.client = gspread.authorize(credentials)
             logger.info("Successfully connected to Google Sheets")
             
@@ -88,11 +101,12 @@ class SheetsManager:
                 logger.info(f"Successfully accessed spreadsheet. Available worksheets: {worksheet_names}")
             except Exception as e:
                 logger.error(f"Could access credentials but failed to open spreadsheet: {str(e)}")
+                logger.error(traceback.format_exc())
                 
             return True
         except Exception as e:
             logger.error(f"Failed to connect to Google Sheets: {str(e)}")
-            logger.error(traceback.format_exc())  # Print full stack trace
+            logger.error(traceback.format_exc())
             return False
     
     def get_sheet(self, sheet_name):
@@ -702,7 +716,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         confidence = rec_json.get('confidence', 75)  # Default to 75% if not provided
         
         result = {
-            "recommendation": f"{rec_json['bet']}",
+                        "recommendation": f"{rec_json['bet']}",
             "explanation": rec_json['explanation'],
             "confidence": confidence,
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -718,7 +732,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
                     "sport": result["sport"],
                     "recommendation": result["recommendation"],
                     "confidence": result["confidence"],
-                                        "explanation": result["explanation"]
+                    "explanation": result["explanation"]
                 }
                 prediction_id = sheets_manager.store_prediction(pred_data)
                 if prediction_id:
@@ -1266,7 +1280,7 @@ def read_root():
             "/player-best-bet",
             "/available-sports",
             "/clear-cache",
-            "/test-sheets",  # New endpoint for testing sheets connection
+            "/test-sheets-connection",  # New endpoint for testing sheets connection
             "/track-interaction"
         ]
     }
@@ -1311,55 +1325,38 @@ async def track_interaction(
     return {"message": "Failed to record interaction"}
 
 # Add a test endpoint for Google Sheets
-@app.get("/test-sheets")
-async def test_sheets():
-    """
-    Test endpoint for Google Sheets connection
-    """
-    if not sheets_manager:
-        return {"error": "Google Sheets manager not initialized"}
-        
+@app.get("/test-sheets-connection")
+async def test_sheets_connection():
+    """Simple test endpoint to verify Google Sheets connection"""
+    if not sheets_manager or not sheets_manager.client:
+        return {
+            "status": "error",
+            "message": "No active Google Sheets connection",
+            "spreadsheet_id": os.getenv("SPREADSHEET_ID"),
+            "has_credentials_json": bool(os.getenv("GOOGLE_CREDENTIALS_JSON")),
+            "has_credentials_path": bool(os.getenv("GOOGLE_CREDENTIALS_PATH"))
+        }
+    
     try:
-        # Test direct connection with gspread
-        import gspread
-        from oauth2client.service_account import ServiceAccountCredentials
+        # Test spreadsheet access
+        spreadsheet = sheets_manager.client.open_by_key(sheets_manager.spreadsheet_id)
+        worksheet_names = [ws.title for ws in spreadsheet.worksheets()]
         
-        creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH")
-        sheet_id = os.getenv("SPREADSHEET_ID")
+        # Try to write to a worksheet
+        test_sheet = spreadsheet.worksheet("Games")
+        row = ["TEST", "Connection Test", datetime.now().isoformat()]
+        test_sheet.append_row(row)
         
-        logger.info(f"Testing with creds path: {creds_path}")
-        logger.info(f"Testing with spreadsheet ID: {sheet_id}")
-        
-        # Check if credentials file exists
-        if not os.path.exists(creds_path):
-            return {"error": f"Credentials file not found at: {creds_path}"}
-        
-        # Try to read the credentials file to see if it's valid
-        try:
-            with open(creds_path, "r") as f:
-                creds_content = f.read()
-                logger.info(f"Credentials file exists and is readable. Size: {len(creds_content)} bytes")
-        except Exception as e:
-            return {"error": f"Could not read credentials file: {str(e)}"}
-        
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
-        client = gspread.authorize(creds)
-        
-        # Open the spreadsheet and test access
-        sheet = client.open_by_key(sheet_id)
-        worksheet = sheet.worksheet("Games")
-        
-        # Try to write a test row
-        test_row = ["TEST", "Testing", "Google Sheets", "Connection", str(datetime.now())]
-        worksheet.append_row(test_row)
-        
-        return {"success": True, "message": "Successfully wrote test data to Google Sheets"}
+        return {
+            "status": "success",
+            "message": "Successfully connected to Google Sheets and wrote test data",
+            "worksheets": worksheet_names
+        }
     except Exception as e:
-        logger.error(f"Sheet test error: {str(e)}")
-        trace = traceback.format_exc()
-        logger.error(trace)
-        return {"error": str(e), "trace": trace}
+        return {
+            "status": "error",
+            "message": f"Error testing connection: {str(e)}"
+        }
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
