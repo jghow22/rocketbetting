@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import uuid
 import traceback
 from functools import lru_cache
+import random
 # Google Sheets Integration
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -252,6 +253,20 @@ class SheetsManager:
             logger.info(f"Attempting to store prediction in sheet for {sport}: {recommendation}")
             worksheet.append_row(row)
             logger.info(f"Successfully stored prediction for {sport}: {recommendation}")
+            
+            # Also create a pending outcome record
+            try:
+                outcome_data = {
+                    "prediction_id": prediction_id,
+                    "outcome": "Pending",
+                    "details": f"Automatically created for {pred_type} bet",
+                    "actual_result": ""
+                }
+                self.store_outcome(outcome_data)
+                logger.info(f"Created initial pending outcome record for prediction {prediction_id}")
+            except Exception as e:
+                logger.error(f"Error creating initial outcome record: {str(e)}")
+            
             return prediction_id
         except gspread.exceptions.APIError as e:
             if "429" in str(e): # Rate limit error
@@ -719,7 +734,7 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                     f"Teams: {home_team} (Home), {away_team} (Away)"
                 )
                 
-                # Store player prop in Google Sheets
+                                # Store player prop in Google Sheets
                 if sheets_manager:
                     try:
                         logger.info(f"Storing player prop for {name} - {bet_type} in Player Props Sheet")
@@ -1070,7 +1085,7 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
     )
     
     try:
-                # New OpenAI API format
+        # New OpenAI API format
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -1096,9 +1111,24 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
         
         confidence = rec_json.get('confidence', 70) # Default to 70% for player props
         
+        # Check if 'player_bet' key exists - if not, extract from other keys or generate a recommendation
+        player_bet = rec_json.get('player_bet')
+        if not player_bet:
+            logger.warning("No 'player_bet' key in AI response, attempting to construct recommendation from available data")
+            # Try to construct from other keys
+            if 'player' in rec_json and 'bet' in rec_json:
+                player_bet = f"{rec_json['player']} on {rec_json['bet']}"
+            elif 'recommendation' in rec_json:
+                player_bet = rec_json['recommendation']
+            elif 'bet' in rec_json:
+                player_bet = rec_json['bet']
+            else:
+                # Fallback to a generic recommendation if all else fails
+                player_bet = "Player not specified - insufficient data for clear recommendation"
+        
         result = {
-            "recommendation": f"{rec_json['player_bet']}",
-            "explanation": rec_json['explanation'],
+            "recommendation": player_bet,
+            "explanation": rec_json.get('explanation', "No detailed explanation provided"),
             "confidence": confidence,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
@@ -1152,6 +1182,96 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
         logger.error(f"AI request failed for best player bet: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"AI analysis failed: {str(e)}"}
+
+def update_random_outcomes(limit: int = 5):
+    """
+    Update a random selection of pending outcomes for demo purposes.
+    This would be replaced with actual outcome tracking in a production system.
+    Args:
+        limit: Maximum number of outcomes to update
+    Returns:
+        Count of updated outcomes
+    """
+    if not sheets_manager:
+        return {"error": "Google Sheets integration not available"}
+    
+    try:
+        # Get Predictions worksheet to find pending predictions
+        predictions_sheet = sheets_manager.get_sheet("Predictions")
+        if not predictions_sheet:
+            return {"error": "Could not access Predictions worksheet"}
+            
+        # Get all rows from the Predictions sheet
+        all_rows = predictions_sheet.get_all_values()
+        if len(all_rows) <= 1:
+            return {"message": "No predictions to update", "count": 0}
+            
+        # Extract header row and data rows
+        header = all_rows[0]
+        data_rows = all_rows[1:]
+        
+        # Find the column indexes for ID and outcome
+        id_col = header.index("ID") if "ID" in header else 0
+        outcome_col = header.index("Outcome") if "Outcome" in header else 7  # Default to 8th column
+        
+        # Find predictions with "Pending" outcome
+        pending_predictions = []
+        for i, row in enumerate(data_rows):
+            if i < len(data_rows) and len(row) > outcome_col and row[outcome_col] == "Pending":
+                pending_predictions.append({
+                    "index": i + 2,  # +2 because of 0-based index and header row
+                    "id": row[id_col],
+                    "row": row
+                })
+        
+        # If we don't have any pending predictions, return
+        if not pending_predictions:
+            return {"message": "No pending predictions to update", "count": 0}
+            
+        # Select predictions to update (limited by 'limit' parameter)
+        to_update = random.sample(pending_predictions, min(limit, len(pending_predictions)))
+        
+        # Possible outcomes
+        outcomes = ["Win", "Loss", "Push"]
+        outcome_weights = [0.45, 0.45, 0.1]  # 45% win, 45% loss, 10% push
+        
+        updated_count = 0
+        for pred in to_update:
+            try:
+                # Select a random outcome based on weights
+                outcome = random.choices(outcomes, weights=outcome_weights, k=1)[0]
+                
+                # Update the Predictions sheet
+                predictions_sheet.update_cell(pred["index"], outcome_col + 1, outcome)
+                
+                # Also record in Outcomes sheet
+                outcome_data = {
+                    "prediction_id": pred["id"],
+                    "outcome": outcome,
+                    "details": "Automated outcome update for demo",
+                    "actual_result": f"Simulated {outcome.lower()} for {pred['row'][2]} bet"  # Sport from column 3
+                }
+                
+                sheets_manager.store_outcome(outcome_data)
+                
+                # Also update metrics
+                sheets_manager.update_metrics({
+                    "type": "prediction_outcome",
+                    "value": 1, 
+                    "sport": pred["row"][2],  # Sport from column 3
+                    "details": f"Outcome: {outcome} for {pred['row'][3]}"  # Recommendation from column 4
+                })
+                
+                updated_count += 1
+                logger.info(f"Updated outcome for prediction {pred['id']} to {outcome}")
+            except Exception as e:
+                logger.error(f"Error updating outcome for prediction {pred['id']}: {str(e)}")
+        
+        return {"message": f"Updated {updated_count} outcomes", "count": updated_count}
+    except Exception as e:
+        logger.error(f"Error in update_random_outcomes: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {"error": f"Error updating outcomes: {str(e)}"}
 
 @app.get("/games")
 async def get_games(
@@ -1339,7 +1459,7 @@ async def get_sport_best_pick(
     result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
     bets_cache[cache_key] = result
     
-    # Update metrics for API usage
+       # Update metrics for API usage
     if sheets_manager and result and not result.get("error"):
         try:
             metrics_data = {
@@ -1615,6 +1735,17 @@ async def update_metrics(
         logger.error(traceback.format_exc())
         return {"error": f"Error updating metrics: {str(e)}"}
 
+@app.get("/update-demo-outcomes")
+async def update_demo_outcomes(limit: int = Query(5, ge=1, le=20)):
+    """
+    Update a random selection of pending outcomes for demo purposes.
+    Args:
+        limit: Maximum number of outcomes to update
+    Returns:
+        Count of updated outcomes
+    """
+    return update_random_outcomes(limit)
+
 @app.get("/")
 def read_root():
     """
@@ -1640,7 +1771,8 @@ def read_root():
             "/record-outcome", # New endpoint
             "/update-metrics", # New endpoint
             "/verify-sheets", # New debug endpoint
-            "/test-all-sheets" # New test endpoint
+            "/test-all-sheets", # New test endpoint
+            "/update-demo-outcomes" # New endpoint for demo outcomes
         ]
     }
 
@@ -1888,7 +2020,6 @@ async def verify_sheets():
             "message": f"Error testing Player Props Sheet: {str(e)}"
         }
     
-    
     # 4. Test Outcomes sheet
     try:
         logger.info("Testing Outcomes sheet...")
@@ -1897,7 +2028,7 @@ async def verify_sheets():
         if not pred_id:
             pred_id = f"test_{uuid.uuid4()}"
             
-            test_outcome = {
+        test_outcome = {
             "prediction_id": pred_id,
             "outcome": "Test Outcome",
             "details": "Test details for debugging",
