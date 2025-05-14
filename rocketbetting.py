@@ -1273,6 +1273,117 @@ def update_random_outcomes(limit: int = 5):
         logger.error(traceback.format_exc())
         return {"error": f"Error updating outcomes: {str(e)}"}
 
+@app.get("/dashboard-metrics")
+async def get_dashboard_metrics():
+    """
+    Get metrics for the dashboard.
+    Returns:
+        Dictionary with various metrics about predictions and outcomes
+    """
+    if not sheets_manager:
+        return {
+            "total_predictions": 0,
+            "high_confidence_picks": 0,
+            "average_confidence": 0,
+            "sport_breakdown": []
+        }
+        
+    try:
+        # Get Predictions worksheet
+        predictions_sheet = sheets_manager.get_sheet("Predictions")
+        if not predictions_sheet:
+            logger.error("Could not access Predictions worksheet")
+            return {"error": "Could not access prediction data"}
+            
+        # Get all rows from Predictions sheet
+        all_rows = predictions_sheet.get_all_values()
+        if len(all_rows) <= 1:
+            return {
+                "total_predictions": 0,
+                "high_confidence_picks": 0,
+                "average_confidence": 0,
+                "sport_breakdown": []
+            }
+            
+        # Extract header and data
+        header = all_rows[0]
+        data_rows = all_rows[1:]
+        
+        # Find column indexes
+        sport_col = header.index("Sport") if "Sport" in header else 2  # Default to 3rd column
+        confidence_col = header.index("Confidence") if "Confidence" in header else 4  # Default to 5th column
+        outcome_col = header.index("Outcome") if "Outcome" in header else 7  # Default to 8th column
+        
+        # Calculate metrics
+        total_predictions = len(data_rows)
+        high_confidence_count = 0
+        confidence_sum = 0
+        sport_counts = {}
+        
+        for row in data_rows:
+            # Count high confidence predictions (>75%)
+            try:
+                confidence = float(row[confidence_col]) if row[confidence_col] and row[confidence_col] != "Confidence" else 0
+                confidence_sum += confidence
+                if confidence >= 75:
+                    high_confidence_count += 1
+            except (ValueError, IndexError):
+                pass
+                
+            # Count by sport
+            try:
+                sport = row[sport_col] if len(row) > sport_col else "Unknown"
+                if sport in sport_counts:
+                    sport_counts[sport] += 1
+                else:
+                    sport_counts[sport] = 1
+            except IndexError:
+                pass
+        
+        # Calculate average confidence
+        avg_confidence = round(confidence_sum / total_predictions, 1) if total_predictions > 0 else 0
+        
+        # Format sport breakdown
+        sport_breakdown = [{"sport": sport, "count": count} for sport, count in sport_counts.items()]
+        sport_breakdown.sort(key=lambda x: x["count"], reverse=True)
+        
+        # Get outcome summary
+        outcomes_sheet = sheets_manager.get_sheet("Outcomes")
+        win_count = 0
+        loss_count = 0
+        push_count = 0
+        
+        if outcomes_sheet:
+            outcomes_rows = outcomes_sheet.get_all_values()
+            if len(outcomes_rows) > 1:
+                outcome_data_rows = outcomes_rows[1:]
+                for row in outcome_data_rows:
+                    if len(row) > 1:
+                        outcome = row[1].lower() if row[1] else ""
+                        if outcome == "win":
+                            win_count += 1
+                        elif outcome == "loss":
+                            loss_count += 1
+                        elif outcome == "push":
+                            push_count += 1
+        
+        return {
+            "total_predictions": total_predictions,
+            "high_confidence_picks": high_confidence_count,
+            "average_confidence": avg_confidence,
+            "sport_breakdown": sport_breakdown[:5],  # Top 5 sports
+            "outcome_summary": {
+                "win": win_count,
+                "loss": loss_count,
+                "push": push_count,
+                "win_rate": round((win_count / (win_count + loss_count)) * 100, 1) if (win_count + loss_count) > 0 else 0
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error generating dashboard metrics: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {"error": f"Error generating dashboard metrics: {str(e)}"}
+
 @app.get("/games")
 async def get_games(
     sport: str = Query(None, description="Sport code (e.g., NBA, NFL)")
@@ -1459,7 +1570,7 @@ async def get_sport_best_pick(
     result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
     bets_cache[cache_key] = result
     
-       # Update metrics for API usage
+    # Update metrics for API usage
     if sheets_manager and result and not result.get("error"):
         try:
             metrics_data = {
@@ -1772,7 +1883,8 @@ def read_root():
             "/update-metrics", # New endpoint
             "/verify-sheets", # New debug endpoint
             "/test-all-sheets", # New test endpoint
-            "/update-demo-outcomes" # New endpoint for demo outcomes
+            "/update-demo-outcomes", # New endpoint for demo outcomes
+            "/dashboard-metrics" # New endpoint for dashboard data
         ]
     }
 
