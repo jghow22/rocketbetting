@@ -439,50 +439,9 @@ SPORT_DISPLAY_NAMES: Dict[str, str] = {
     "MLB": "Baseball (MLB)",
     "NHL": "Hockey (NHL)"
 }
-
-# Define sports seasons for availability checks
-SPORT_SEASONS: Dict[str, Dict[str, str]] = {
-    "NBA": {"start": "2023-10-24", "end": "2024-06-20"},
-    "NFL": {"start": "2023-09-07", "end": "2024-02-11"},
-    "MLB": {"start": "2024-03-28", "end": "2024-11-01"},
-    "NHL": {"start": "2023-10-10", "end": "2024-06-15"},
-    "MLS": {"start": "2024-02-21", "end": "2024-10-01"},
-    "CFB": {"start": "2024-08-24", "end": "2025-01-20"}
-}
-
 # Create caches (TTL in seconds)
 games_cache = TTLCache(maxsize=100, ttl=600) # Cache games for 10 minutes
 bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 minutes
-
-def is_sport_in_season(sport_code):
-    """Check if a sport is currently in season"""
-    if sport_code not in SPORT_SEASONS:
-        return True  # If we don't know, assume it's in season
-        
-    season = SPORT_SEASONS[sport_code]
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    return season["start"] <= today <= season["end"]
-
-def filter_upcoming_games(games_data):
-    """Filter out games that have already started or completed"""
-    now = datetime.now(timezone.utc)
-    upcoming_games = []
-    
-    for game in games_data:
-        if "commence_time" in game:
-            try:
-                game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                # Only include games that haven't started yet
-                if game_time > now:
-                    upcoming_games.append(game)
-            except (ValueError, TypeError):
-                # If date parsing fails, skip this game
-                pass
-    
-    logger.info(f"Filtered {len(games_data)} games to {len(upcoming_games)} upcoming games")
-    return upcoming_games
-
 def generate_fallback_recommendation(is_parlay=False):
     """
     Generate a fallback recommendation when the AI generation fails.
@@ -491,31 +450,17 @@ def generate_fallback_recommendation(is_parlay=False):
     Returns:
         Dictionary with recommendation details
     """
-    # Sports and teams for fallback recommendations - focus on in-season sports
-    in_season_sports = [sport for sport, url in SPORTS_BASE_URLS.items() if is_sport_in_season(sport)]
-    
-    # If no sports are in season, use all sports
-    if not in_season_sports:
-        sports = list(SPORTS_BASE_URLS.keys())
-    else:
-        sports = in_season_sports
-    
+    # Sports and teams for fallback recommendations
+    sports = ["NBA", "NFL", "MLB", "NHL"]
     sport = random.choice(sports)
-    
     teams = {
         "NBA": ["Lakers", "Celtics", "Warriors", "Bucks", "Heat", "76ers"],
         "NFL": ["Chiefs", "Eagles", "Cowboys", "Ravens", "49ers", "Bills"],
         "MLB": ["Yankees", "Dodgers", "Red Sox", "Braves", "Cubs", "Astros"],
-        "NHL": ["Maple Leafs", "Bruins", "Rangers", "Avalanche", "Lightning", "Oilers"],
-        "MLS": ["Inter Miami", "LA Galaxy", "LAFC", "Seattle Sounders", "Atlanta United", "Portland Timbers"],
-        "CFB": ["Georgia", "Michigan", "Alabama", "Ohio State", "Texas", "LSU"]
+        "NHL": ["Maple Leafs", "Bruins", "Rangers", "Avalanche", "Lightning", "Oilers"]
     }
     # Get teams for the selected sport
     sport_teams = teams.get(sport, teams["NBA"])
-    
-    # Add the current date to recommendation for freshness
-    today = datetime.now().strftime("%Y-%m-%d")
-    
     # Create fallback recommendation
     if is_parlay:
         # Create a parlay recommendation
@@ -529,7 +474,7 @@ def generate_fallback_recommendation(is_parlay=False):
             team2 = random.choice(remaining_teams)
         recommendation = {
             "recommendation": f"{team1} & {team2}",
-            "explanation": f"This parlay offers strong value based on today's ({today}) matchups. {team1} has shown excellent form in their recent games with improvements in offensive efficiency. {team2} has a favorable matchup and has consistently covered the spread in similar situations.",
+            "explanation": f"This parlay offers strong value based on recent performance. {team1} has shown excellent form in their last 5 games with improvements in offensive efficiency. {team2} has a favorable matchup and has consistently covered the spread in similar situations.",
             "confidence": random.randint(60, 70),
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": sport
@@ -539,13 +484,12 @@ def generate_fallback_recommendation(is_parlay=False):
         team = random.choice(sport_teams)
         recommendation = {
             "recommendation": team,
-            "explanation": f"{team} presents strong betting value in their upcoming matchup on {today}. They've been performing well offensively and have a statistical advantage against their opponent's defense. Recent team news and injury reports suggest they'll be at full strength.",
+            "explanation": f"{team} presents strong betting value in their upcoming matchup. They've been performing well offensively and have a statistical advantage against their opponent's defense. Recent team news and injury reports suggest they'll be at full strength.",
             "confidence": random.randint(70, 85),
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": sport
         }
     return recommendation
-
 def verify_api_keys():
     """Verify that required API keys are set."""
     missing_keys = []
@@ -562,7 +506,6 @@ def verify_api_keys():
             status_code=500,
             detail=f"Server configuration error: Missing API keys ({missing_str})"
         )
-
 def extract_json(text: str) -> Optional[Dict[str, Any]]:
     """
     Extract a JSON object from text using regex.
@@ -579,7 +522,6 @@ def extract_json(text: str) -> Optional[Dict[str, Any]]:
             logger.warning(f"Failed to parse JSON with regex: {str(e)}")
             return None
     return None
-
 def format_datetime(dt_str: str) -> str:
     """
     Format a datetime string into a user-friendly format.
@@ -593,7 +535,6 @@ def format_datetime(dt_str: str) -> str:
         return dt.strftime("%A, %B %d, %Y at %I:%M %p")
     except Exception:
         return dt_str
-
 def evaluate_bet_value(odds: float, estimated_probability: float) -> float:
     """
     Calculate the expected value of a bet.
@@ -604,7 +545,6 @@ def evaluate_bet_value(odds: float, estimated_probability: float) -> float:
         Expected value of the bet (positive is good)
     """
     return (odds * estimated_probability) - 1
-
 def fetch_odds(
     api_key: str,
     base_url: str,
@@ -634,7 +574,6 @@ def fetch_odds(
     except requests.RequestException as e:
         logger.error(f"Request to {base_url} failed: {str(e)}")
         return None
-
 def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, Any]]:
     """
     Fetch player data from TheSportsDB API.
@@ -661,7 +600,6 @@ def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, An
     except ValueError as e:
         logger.error(f"Could not parse TheSportsDB response: {str(e)}")
         return []
-
 def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
     """
     Format odds data with enhanced context for better AI analysis.
@@ -724,7 +662,6 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
                                 f"Source: {bookmaker_name}{additional_context}"
                             )
     return game_descriptions
-
 def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
     """
     Format player prop bet data into human-readable descriptions for AI analysis.
@@ -794,7 +731,6 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                         logger.error(f"Error storing player prop in Google Sheets: {str(e)}")
                         logger.error(traceback.format_exc())
     return player_descriptions
-
 def get_sport_hint(descriptions: List[str]) -> str:
     """
     Extract sport code from a list of game descriptions.
@@ -807,7 +743,6 @@ def get_sport_hint(descriptions: List[str]) -> str:
         if ":" in desc:
             return desc.split(":", 1)[0].strip()
     return ""
-
 def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Format games data for frontend display.
@@ -843,11 +778,12 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
             logger.warning(f"Error formatting game data: {str(e)}")
     return formatted_games
 
-def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, str], Dict[str, Any]]:
+def generate_best_pick_with_ai(game_descriptions: List[str], prompt_enhancement: str = "") -> Union[Dict[str, str], Dict[str, Any]]:
     """
     Generate the best straight bet recommendation using enhanced AI analysis.
     Args:
         game_descriptions: List of formatted game descriptions
+        prompt_enhancement: Additional prompt instructions to focus on upcoming games
     Returns:
         Dictionary with recommendation details or error message
     """
@@ -857,20 +793,21 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
-    # Modified prompt to emphasize upcoming games only and avoid outdated references
+    # Add the prompt enhancement to focus on upcoming games
+    enhancement = prompt_enhancement if prompt_enhancement else ""
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
-        "Analyze the following UPCOMING games (games that have NOT happened yet) and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
-        "\n\nIn your analysis, consider the following factors, in order of importance:"
+        "Analyze the following games and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
+        f"\n\n{enhancement}\n\n"
+        "In your analysis, consider the following factors, in order of importance:"
         "\n1. Recent team performance and momentum (last 5-10 games)"
-        "\n2. Head-to-head matchups between the teams THIS season only"
+        "\n2. Head-to-head matchups between the teams this season"
         "\n3. Key player availability (injuries, rest days, etc.)"
         "\n4. Home/away performance disparities"
         "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
         "\n6. Statistical matchups and advantages"
         "\n7. Value compared to the offered odds"
-        "\n\nIMPORTANT: ONLY analyze upcoming games. Do NOT reference past games as if they are upcoming. Today's date is " + 
-        datetime.now().strftime("%Y-%m-%d") + "."
         "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
         '\n{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Detailed reasoning with specific data points]", "confidence": [0-100]}'
         "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
@@ -884,7 +821,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
             temperature=0,
             max_tokens=500, # Increased token limit for more detailed analysis
             messages=[
-                {"role": "system", "content": "You are an expert sports betting analyst focused on UPCOMING games only. Today's date is " + datetime.now().strftime("%Y-%m-%d") + ". Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "system", "content": f"You are an expert sports betting analyst focused on upcoming games only. Today's date is {datetime.now().strftime('%Y-%m-%d')}. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -951,11 +888,12 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         logger.error(traceback.format_exc())
         return {"error": f"AI analysis failed: {str(e)}"}
 
-def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]:
+def generate_best_parlay_with_ai(game_descriptions: List[str], prompt_enhancement: str = "") -> Dict[str, Any]:
     """
     Generate the best parlay bet recommendation using enhanced AI analysis.
     Args:
         game_descriptions: List of formatted game descriptions
+        prompt_enhancement: Additional prompt instructions to focus on upcoming games
     Returns:
         Dictionary with recommendation info or error message
     """
@@ -965,20 +903,21 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
-    # Modified prompt to emphasize upcoming games only and avoid outdated references
+    # Add the prompt enhancement to focus on upcoming games
+    enhancement = prompt_enhancement if prompt_enhancement else ""
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
-        "Analyze the following UPCOMING games (games that have NOT happened yet) and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
-        "\n\nIn your analysis, consider the following factors for EACH game in your parlay:"
+        "Analyze the following games and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
+        f"\n\n{enhancement}\n\n"
+        "In your analysis, consider the following factors for EACH game in your parlay:"
         "\n1. Recent team performance and momentum (last 5-10 games)"
-        "\n2. Head-to-head matchups between the teams THIS season only"
+        "\n2. Head-to-head matchups between the teams this season"
         "\n3. Key player availability (injuries, rest days, etc.)"
         "\n4. Home/away performance disparities"
         "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
         "\n6. Statistical matchups and advantages"
         "\n7. Diversification of risk (avoid multiple games with similar risk profiles)"
-        "\n\nIMPORTANT: ONLY analyze upcoming games. Do NOT reference past games as if they are upcoming. Today's date is " + 
-        datetime.now().strftime("%Y-%m-%d") + "."
         "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
         '\n{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Detailed reasoning with specific data points for EACH pick]", "confidence": [0-100]}'
         "\n\nNote: Parlay confidence should generally be lower than straight bets due to compounding risk. Only assign confidence scores above 70 in extraordinary circumstances."
@@ -992,7 +931,7 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
             temperature=0,
             max_tokens=600, # Increased for more detailed analysis
             messages=[
-                {"role": "system", "content": "You are an expert sports betting analyst focused on UPCOMING games only. Today's date is " + datetime.now().strftime("%Y-%m-%d") + ". Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "system", "content": f"You are an expert sports betting analyst focused on upcoming games only. Today's date is {datetime.now().strftime('%Y-%m-%d')}. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -1072,11 +1011,9 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
     sport_hint = get_sport_hint(player_descriptions)
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
-    
-    # Modified prompt to emphasize upcoming games only and avoid outdated references
     prompt = (
         "You are an expert sports betting analyst specializing in player performance statistics and trends. "
-        "Analyze the following player prop betting options for UPCOMING games (games that have NOT happened yet) and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
+        "Analyze the following player prop betting options and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
         "\n\nIn your analysis, consider the following factors, in order of importance:"
         "\n1. Player's recent performance trend (last 5-10 games)"
         "\n2. Player's performance against this specific opponent historically"
@@ -1085,8 +1022,6 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
         "\n5. Situational factors (minutes restrictions, injuries to teammates, etc.)"
         "\n6. Statistical anomalies that may regress to the mean"
         "\n7. Value compared to the offered odds"
-        "\n\nIMPORTANT: ONLY analyze upcoming games. Do NOT reference past games as if they are upcoming. Today's date is " + 
-        datetime.now().strftime("%Y-%m-%d") + "."
         "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
         '\n{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Detailed reasoning with specific statistical evidence]", "confidence": [0-100]}'
         "\n\nYour explanation must include specific statistical data and clear reasoning."
@@ -1100,7 +1035,7 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
             temperature=0,
             max_tokens=500, # Increased for more detailed analysis
             messages=[
-                {"role": "system", "content": "You are an expert sports betting analyst focused on UPCOMING games only. Today's date is " + datetime.now().strftime("%Y-%m-%d") + ". Respond ONLY with the valid JSON object in the exact format."},
+                {"role": "system", "content": "You are an expert sports betting analyst. Respond ONLY with the valid JSON object in the exact format."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -1180,7 +1115,6 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
         logger.error(f"AI request failed for best player bet: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"AI analysis failed: {str(e)}"}
-
 def update_random_outcomes(limit: int = 5):
     """
     Update a random selection of pending outcomes for demo purposes.
@@ -1255,7 +1189,6 @@ def update_random_outcomes(limit: int = 5):
         logger.error(f"Error in update_random_outcomes: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error updating outcomes: {str(e)}"}
-
 @app.get("/dashboard-metrics")
 async def get_dashboard_metrics():
     """
@@ -1354,7 +1287,6 @@ async def get_dashboard_metrics():
         logger.error(f"Error generating dashboard metrics: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error generating dashboard metrics: {str(e)}"}
-
 @app.get("/games")
 async def get_games(
     sport: str = Query(None, description="Sport code (e.g., NBA, NFL)")
@@ -1375,24 +1307,12 @@ async def get_games(
         return games_cache[cache_key]
     if sport:
         sp = sport.upper()
-        
-        # Check if sport is in season
-        if not is_sport_in_season(sp):
-            logger.warning(f"Sport {sp} is currently out of season")
-            return {"message": f"{sp} is currently out of season. No upcoming games available."}
-            
         url = SPORTS_BASE_URLS.get(sp)
         if not url:
             return {"error": f"Sport not supported: {sport}"}
         data = fetch_odds(API_KEY, url)
         if not data:
             return {"error": f"No games found for {sp}."}
-            
-        # Filter to only show upcoming games
-        data = filter_upcoming_games(data)
-        if not data:
-            return {"message": f"No upcoming games found for {sp}."}
-            
         # Store each game in the Games tab
         if sheets_manager:
             logger.info(f"Storing {len(data)} games for {sp} in Games sheet")
@@ -1408,33 +1328,19 @@ async def get_games(
     # If no sport specified, get all games
     all_games = []
     for sp, url in SPORTS_BASE_URLS.items():
-        # Skip sports that are out of season
-        if not is_sport_in_season(sp):
-            logger.info(f"Skipping {sp} - currently out of season")
-            continue
-            
         data = fetch_odds(API_KEY, url)
         if data:
-            # Filter to only show upcoming games
-            filtered_data = filter_upcoming_games(data)
-            
             # Add sport to each game
-            for game in filtered_data:
+            for game in data:
                 game["sport"] = sp
-                
             # Store each game in the Games tab
             if sheets_manager:
                 try:
-                    for game in filtered_data:
+                    for game in data:
                         sheets_manager.store_game(game)
                 except Exception as e:
                     logger.error(f"Error storing game in Games sheet: {str(e)}")
-                    
-            all_games.extend(filtered_data)
-            
-    if not all_games:
-        return {"message": "No upcoming games found for any in-season sports."}
-        
+            all_games.extend(data)
     formatted_data = format_games_response(all_games)
     games_cache[cache_key] = formatted_data
     return formatted_data if formatted_data else {"error": "No games found."}
@@ -1452,50 +1358,68 @@ async def get_best_pick():
             verify_api_keys()
         except Exception as e:
             logger.warning(f"API key verification failed: {str(e)}")
-        cache_key = "best_pick:all"
-        # Check if we have cached data
-        if cache_key in bets_cache:
-            logger.info("Returning cached best pick recommendation")
-            return {"best_pick": bets_cache[cache_key]}
+            
+        # Skip cache check - always generate fresh recommendations
         all_desc = []
         all_games = []
-        # Try to fetch odds data
+        
+        # Try to fetch fresh odds data
         try:
             for sp, url in SPORTS_BASE_URLS.items():
-                # Skip sports that are out of season
-                if not is_sport_in_season(sp):
-                    logger.info(f"Skipping {sp} - currently out of season")
-                    continue
-                    
                 try:
                     data = fetch_odds(API_KEY, url)
                     if data:
-                        # Filter to only show upcoming games
-                        filtered_data = filter_upcoming_games(data)
+                        # Filter to focus on more recent/upcoming games
+                        now = datetime.now(timezone.utc)
+                        filtered_data = []
+                        for game in data:
+                            if "commence_time" in game:
+                                try:
+                                    game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
+                                    # Include games starting in the next 48 hours
+                                    if now <= game_time <= (now + timedelta(hours=48)):
+                                        filtered_data.append(game)
+                                except (ValueError, TypeError):
+                                    # If we can't parse the date, include the game anyway
+                                    filtered_data.append(game)
+                            else:
+                                # If no commence_time, include the game
+                                filtered_data.append(game)
+                        
+                        # If no filtered games, use all games
                         if not filtered_data:
-                            logger.info(f"No upcoming games found for {sp}")
-                            continue
+                            filtered_data = data
                             
-                        # Add sport to each game
+                        # Don't store games anymore, just process them for AI
                         for game in filtered_data:
                             game["sport"] = sp
-                            
+                        
                         # Format for AI analysis
                         game_descriptions = format_odds_for_ai(filtered_data, sp)
                         all_desc.extend(game_descriptions)
                         all_games.extend(filtered_data)
-                        
                 except Exception as e:
                     logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         except Exception as e:
             logger.warning(f"Error in odds fetching process: {str(e)}")
+            
         # If we have game descriptions, try to generate a recommendation with AI
         if all_desc:
+            # Enhance the prompt to focus on upcoming games
+            prompt_enhancement = (
+                "IMPORTANT: Focus ONLY on upcoming games that haven't started yet. "
+                f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
+                "Avoid making predictions about games that have already been played."
+            )
+            
             try:
-                result = generate_best_pick_with_ai(all_desc)
+                # For the best_pick, we'll enhance the AI generation to focus on upcoming games
+                result = generate_best_pick_with_ai(all_desc, prompt_enhancement)
+                
                 # Check if we got a valid result
                 if result and not result.get("error"):
-                    bets_cache[cache_key] = result
+                    # Don't cache the result - we want fresh recommendations each time
+                    
                     # Update metrics for new prediction
                     if sheets_manager:
                         try:
@@ -1513,11 +1437,11 @@ async def get_best_pick():
             except Exception as e:
                 logger.error(f"Error generating AI recommendation: {str(e)}")
                 logger.error(traceback.format_exc())
+                
         # If we got here, AI generation failed or we had no games
         # Use fallback mechanism
         logger.warning("Using fallback recommendation mechanism for best_pick")
         fallback_result = generate_fallback_recommendation(is_parlay=False)
-        bets_cache[cache_key] = fallback_result
         return {"best_pick": fallback_result}
     except Exception as e:
         # Catch-all exception handler to ensure we always return something
@@ -1546,33 +1470,41 @@ async def get_best_parlay():
             verify_api_keys()
         except Exception as e:
             logger.warning(f"API key verification failed: {str(e)}")
-        cache_key = "best_parlay:all"
-        # Check if we have cached data
-        if cache_key in bets_cache:
-            logger.info("Returning cached best parlay recommendation")
-            return {"best_parlay": bets_cache[cache_key]}
+            
+        # Skip cache check - always generate fresh recommendations
         all_desc = []
-        # Try to fetch odds data
+        
+        # Try to fetch fresh odds data
         try:
             for sp, url in SPORTS_BASE_URLS.items():
-                # Skip sports that are out of season
-                if not is_sport_in_season(sp):
-                    logger.info(f"Skipping {sp} - currently out of season")
-                    continue
-                    
                 try:
                     data = fetch_odds(API_KEY, url)
                     if data:
-                        # Filter to only show upcoming games
-                        filtered_data = filter_upcoming_games(data)
+                        # Filter to focus on more recent/upcoming games
+                        now = datetime.now(timezone.utc)
+                        filtered_data = []
+                        for game in data:
+                            if "commence_time" in game:
+                                try:
+                                    game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
+                                    # Include games starting in the next 48 hours
+                                    if now <= game_time <= (now + timedelta(hours=48)):
+                                        filtered_data.append(game)
+                                except (ValueError, TypeError):
+                                    # If we can't parse the date, include the game anyway
+                                    filtered_data.append(game)
+                            else:
+                                # If no commence_time, include the game
+                                filtered_data.append(game)
+                        
+                        # If no filtered games, use all games
                         if not filtered_data:
-                            logger.info(f"No upcoming games found for {sp}")
-                            continue
+                            filtered_data = data
                             
-                        # Add sport to each game
+                        # Don't store games anymore, just process them for AI
                         for game in filtered_data:
                             game["sport"] = sp
-                            
+                        
                         # Format for AI analysis
                         game_descriptions = format_odds_for_ai(filtered_data, sp)
                         all_desc.extend(game_descriptions)
@@ -1580,13 +1512,24 @@ async def get_best_parlay():
                     logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         except Exception as e:
             logger.warning(f"Error in odds fetching process: {str(e)}")
+            
         # If we have game descriptions, try to generate a recommendation with AI
         if all_desc:
+            # Enhance the prompt to focus on upcoming games
+            prompt_enhancement = (
+                "IMPORTANT: Focus ONLY on upcoming games that haven't started yet. "
+                f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
+                "Avoid making predictions about games that have already been played."
+            )
+            
             try:
-                result = generate_best_parlay_with_ai(all_desc)
+                # For the best_parlay, we'll enhance the AI generation to focus on upcoming games
+                result = generate_best_parlay_with_ai(all_desc, prompt_enhancement)
+                
                 # Check if we got a valid result
                 if result and not result.get("error"):
-                    bets_cache[cache_key] = result
+                    # Don't cache the result - we want fresh recommendations each time
+                    
                     # Update metrics for API usage
                     if sheets_manager and result and not result.get("error"):
                         try:
@@ -1603,11 +1546,11 @@ async def get_best_parlay():
             except Exception as e:
                 logger.error(f"Error generating AI recommendation: {str(e)}")
                 logger.error(traceback.format_exc())
+                
         # If we got here, AI generation failed or we had no games
         # Use fallback mechanism
         logger.warning("Using fallback recommendation mechanism for best_parlay")
         fallback_result = generate_fallback_recommendation(is_parlay=True)
-        bets_cache[cache_key] = fallback_result
         return {"best_parlay": fallback_result}
     except Exception as e:
         # Catch-all exception handler to ensure we always return something
@@ -1642,42 +1585,16 @@ async def get_sport_best_pick(
         logger.info(f"Returning cached best pick for {sport}")
         return {"sport_best_pick": bets_cache[cache_key]}
     sp = sport.upper()
-    
-    # Check if sport is in season
-    if not is_sport_in_season(sp):
-        logger.warning(f"Sport {sp} is currently out of season")
-        return {"sport_best_pick": {
-            "recommendation": f"{sp} is currently out of season",
-            "explanation": f"There are no upcoming {sp} games to analyze as the sport is currently out of season. Please check back during the {sp} season for betting recommendations.",
-            "confidence": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sp
-        }}
-    
     url = SPORTS_BASE_URLS.get(sp)
     if not url:
         return {"error": f"Sport not supported: {sport}"}
     data = fetch_odds(API_KEY, url)
     if not data:
         return {"error": f"No games found for {sp}."}
-        
-    # Filter to only include upcoming games
-    filtered_data = filter_upcoming_games(data)
-    if not filtered_data:
-        return {"sport_best_pick": {
-            "recommendation": f"No upcoming {sp} games available",
-            "explanation": f"There are no upcoming {sp} games scheduled at this time. Please check back later for betting recommendations when new games are scheduled.",
-            "confidence": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sp
-        }}
-        
-    # Add sport to each game
-    for game in filtered_data:
+    # Don't store games anymore, just process them for AI
+    for game in data:
         game["sport"] = sp
-        
-    # Generate recommendation using AI
-    result = generate_best_pick_with_ai(format_odds_for_ai(filtered_data, sp))
+    result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
     bets_cache[cache_key] = result
     # Update metrics for API usage
     if sheets_manager and result and not result.get("error"):
@@ -1692,7 +1609,6 @@ async def get_sport_best_pick(
         except Exception as e:
             logger.error(f"Error updating metrics for API usage: {str(e)}")
     return {"sport_best_pick": result}
-
 @app.get("/sport-best-parlay")
 async def get_sport_best_parlay(
     sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
@@ -1712,52 +1628,16 @@ async def get_sport_best_parlay(
         logger.info(f"Returning cached best parlay for {sport}")
         return {"sport_best_parlay": bets_cache[cache_key]}
     sp = sport.upper()
-    
-    # Check if sport is in season
-    if not is_sport_in_season(sp):
-        logger.warning(f"Sport {sp} is currently out of season")
-        return {"sport_best_parlay": {
-            "recommendation": f"{sp} is currently out of season",
-            "explanation": f"There are no upcoming {sp} games to analyze as the sport is currently out of season. Please check back during the {sp} season for parlay betting recommendations.",
-            "confidence": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sp
-        }}
-    
     url = SPORTS_BASE_URLS.get(sp)
     if not url:
         return {"error": f"Sport not supported: {sport}"}
     data = fetch_odds(API_KEY, url)
     if not data:
         return {"error": f"No games found for {sp}."}
-        
-    # Filter to only include upcoming games
-    filtered_data = filter_upcoming_games(data)
-    if not filtered_data:
-        return {"sport_best_parlay": {
-            "recommendation": f"No upcoming {sp} games available",
-            "explanation": f"There are no upcoming {sp} games scheduled at this time. Please check back later for parlay betting recommendations when new games are scheduled.",
-            "confidence": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sp
-        }}
-        
-    # Check if we have enough games for a parlay (need at least 2)
-    if len(filtered_data) < 2:
-        return {"sport_best_parlay": {
-            "recommendation": f"Not enough upcoming {sp} games for a parlay",
-            "explanation": f"A parlay requires at least 2 games, but only {len(filtered_data)} upcoming {sp} game was found. Consider a straight bet instead or check back when more games are scheduled.",
-            "confidence": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sp
-        }}
-        
-    # Add sport to each game
-    for game in filtered_data:
+    # Don't store games anymore, just process them for AI
+    for game in data:
         game["sport"] = sp
-        
-    # Generate recommendation using AI
-    result = generate_best_parlay_with_ai(format_odds_for_ai(filtered_data, sp))
+    result = generate_best_parlay_with_ai(format_odds_for_ai(data, sp))
     bets_cache[cache_key] = result
     # Update metrics for API usage
     if sheets_manager and result and not result.get("error"):
@@ -1772,7 +1652,6 @@ async def get_sport_best_parlay(
         except Exception as e:
             logger.error(f"Error updating metrics for API usage: {str(e)}")
     return {"sport_best_parlay": result}
-
 @app.get("/player-best-bet")
 async def get_player_best_bet(
     sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
@@ -1794,18 +1673,6 @@ async def get_player_best_bet(
         logger.info(f"Returning cached best player bet for {sport}")
         return {"best_player_bet": bets_cache[cache_key]}
     sp = sport.upper()
-    
-    # Check if sport is in season
-    if not is_sport_in_season(sp):
-        logger.warning(f"Sport {sp} is currently out of season")
-        return {"best_player_bet": {
-            "recommendation": f"{sp} is currently out of season",
-            "explanation": f"There are no upcoming {sp} games to analyze as the sport is currently out of season. Please check back during the {sp} season for player prop betting recommendations.",
-            "confidence": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sp
-        }}
-    
     base_url = SPORTS_BASE_URLS.get(sp)
     if not base_url:
         return {"best_player_bet": f"Sport not supported: {sport}"}
@@ -1816,18 +1683,13 @@ async def get_player_best_bet(
         logger.info(f"Attempting to fetch player props from Odds API for {sport}")
         odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
         if odds_data:
-            # Filter to only include upcoming games
-            filtered_data = filter_upcoming_games(odds_data)
-            if filtered_data:
-                logger.info(f"Retrieved player props from odds API for {sport}: {len(filtered_data)} upcoming games")
-                player_descriptions = format_player_odds_for_ai(filtered_data, sp)
-                if player_descriptions:
-                    success_source = "Odds API"
-                    logger.info(f"Successfully formatted {len(player_descriptions)} player props from Odds API")
-                else:
-                    logger.warning(f"No player descriptions could be formatted from Odds API data for {sport}")
+            logger.info(f"Retrieved player props from odds API for {sport}: {len(odds_data)} games")
+            player_descriptions = format_player_odds_for_ai(odds_data, sp)
+            if player_descriptions:
+                success_source = "Odds API"
+                logger.info(f"Successfully formatted {len(player_descriptions)} player props from Odds API")
             else:
-                logger.info(f"No upcoming games with player props found for {sport}")
+                logger.warning(f"No player descriptions could be formatted from Odds API data for {sport}")
         else:
             logger.info(f"No player props from odds API for {sport}")
     except Exception as e:
@@ -1884,11 +1746,8 @@ async def get_player_best_bet(
             # Create a fallback prompt for OpenAI to generate plausible player props
             sport_full_name = "Baseball" if sp == "MLB" else "Soccer"
             league_name = "Major League Baseball" if sp == "MLB" else "Major League Soccer"
-            # Add current date context to prompt
-            today = datetime.now().strftime("%Y-%m-%d")
             fallback_prompt = f"""
-Generate 5 realistic player prop bets for upcoming {league_name} ({sp}) games in the current season.
-Today's date is {today}.
+Generate 5 realistic player prop bets for today's {league_name} ({sp}) games.
 For each player, include:
 1. Player name (must be a real current {sp} player)
 2. Their team
@@ -1898,7 +1757,7 @@ For each player, include:
 6. Realistic odds
 Format each player prop as:
 "{sp}: [Player Name] - [Prop Type] [Line] in [Team] vs [Opponent Team] | Odds: [Odds] ([Implied Probability]% implied probability) | Teams: [Team] (Home), [Opponent] (Away)"
-Make these as realistic and accurate as possible for upcoming games only. Do not reference games that have already happened.
+Make these as realistic and accurate as possible for today's actual games.
 """
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
             response = client.chat.completions.create(
@@ -1906,7 +1765,7 @@ Make these as realistic and accurate as possible for upcoming games only. Do not
                 temperature=0.7,
                 max_tokens=600,
                 messages=[
-                    {"role": "system", "content": f"You are an expert {sport_full_name} analyst who knows all current {sp} players and teams. Today's date is {today}."},
+                    {"role": "system", "content": f"You are an expert {sport_full_name} analyst who knows all current {sp} players and teams."},
                     {"role": "user", "content": fallback_prompt}
                 ]
             )
@@ -1924,13 +1783,7 @@ Make these as realistic and accurate as possible for upcoming games only. Do not
     # 4) If still no player data, report unavailable
     if not player_descriptions:
         logger.warning(f"No player data available for {sport} from any source")
-        return {"best_player_bet": {
-            "recommendation": f"Player prop bets are unavailable for {sp}",
-            "explanation": f"No player prop data is currently available for {sp}. This could be because there are no upcoming games, the sport is out of season, or player data is not provided by our data sources.",
-            "confidence": 0,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sp
-        }}
+        return {"best_player_bet": f"Player prop bets are unavailable for {sport}."}
     # Generate recommendation and store in Predictions sheet
     logger.info(f"Generating player bet recommendation from {len(player_descriptions)} player descriptions from {success_source}")
     result = generate_best_player_bet_with_ai(player_descriptions)
@@ -1951,7 +1804,6 @@ Make these as realistic and accurate as possible for upcoming games only. Do not
         except Exception as e:
             logger.error(f"Error updating metrics for API usage: {str(e)}")
     return {"best_player_bet": result}
-
 @app.get("/available-sports")
 async def get_available_sports():
     """
@@ -1959,21 +1811,10 @@ async def get_available_sports():
     Returns:
         List of sport codes and display names
     """
-    # Include "in season" status for each sport
-    sports_with_status = [
-        {"code": "Overall", "name": "All Sports", "in_season": True}
+    return [
+        {"code": "Overall", "name": "All Sports"},
+        *[{"code": code, "name": display} for code, display in SPORT_DISPLAY_NAMES.items()]
     ]
-    
-    for code, display in SPORT_DISPLAY_NAMES.items():
-        in_season = is_sport_in_season(code)
-        sports_with_status.append({
-            "code": code, 
-            "name": display,
-            "in_season": in_season
-        })
-    
-    return sports_with_status
-
 @app.get("/clear-cache")
 async def clear_cache():
     """
@@ -1984,7 +1825,6 @@ async def clear_cache():
     games_cache.clear()
     bets_cache.clear()
     return {"message": "Cache cleared successfully. Next requests will fetch fresh data."}
-
 @app.post("/record-outcome")
 async def record_outcome(outcome_data: OutcomeData):
     """
@@ -2020,7 +1860,6 @@ async def record_outcome(outcome_data: OutcomeData):
         logger.error(f"Error recording outcome: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error recording outcome: {str(e)}"}
-
 @app.post("/update-metrics")
 async def update_metrics(
     metric_type: str = Query(..., description="Type of metric (e.g., predictions, confidence)"),
@@ -2056,7 +1895,6 @@ async def update_metrics(
         logger.error(f"Error updating metrics: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error updating metrics: {str(e)}"}
-
 @app.get("/update-demo-outcomes")
 async def update_demo_outcomes(limit: int = Query(5, ge=1, le=20)):
     """
@@ -2067,7 +1905,6 @@ async def update_demo_outcomes(limit: int = Query(5, ge=1, le=20)):
         Count of updated outcomes
     """
     return update_random_outcomes(limit)
-
 @app.get("/")
 def read_root():
     """
@@ -2077,7 +1914,7 @@ def read_root():
     """
     return {
         "message": "Welcome to the Sports Betting API!",
-        "version": "1.2.0",
+        "version": "1.0.0",
         "endpoints": [
             "/games",
             "/best-pick",
