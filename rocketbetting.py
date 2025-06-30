@@ -37,21 +37,18 @@ import requests
 import openai
 from pydantic import BaseModel
 from cachetools import TTLCache
-
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
 # Pydantic models for request/response validation
 class OutcomeData(BaseModel):
     prediction_id: str
     outcome: str  # "Win", "Loss", "Push", or "Pending"
     details: Optional[str] = None
     actual_result: Optional[str] = None
-
 # Google Sheets Manager class
 class SheetsManager:
     def __init__(self, credentials_path=None, credentials_json=None, spreadsheet_id=None):
@@ -81,7 +78,6 @@ class SheetsManager:
     def connect(self):
         """Connect to Google Sheets API"""
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        
         try:
             if self.credentials_path and os.path.exists(self.credentials_path):
                 logger.info(f"Using credentials file from: {self.credentials_path}")
@@ -187,6 +183,7 @@ class SheetsManager:
             if game_data.get("bookmakers") and len(game_data["bookmakers"]) > 0:
                 bookmaker_data = game_data["bookmakers"][0]
                 bookmaker = bookmaker_data.get("title", "Unknown")
+                
                 for market in bookmaker_data.get("markets", []):
                     if market["key"] == "h2h":
                         outcomes = market.get("outcomes", [])
@@ -502,17 +499,14 @@ bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 
 def generate_fallback_recommendation(is_parlay=False):
     """
     Generate a fallback recommendation when the AI generation fails.
-    
     Args:
         is_parlay: Whether to generate a parlay recommendation
-        
     Returns:
         Dictionary with recommendation details
     """
     # Sports and teams for fallback recommendations
     sports = ["NBA", "NFL", "MLB", "NHL"]
     sport = random.choice(sports)
-    
     teams = {
         "NBA": ["Lakers", "Celtics", "Warriors", "Bucks", "Heat", "76ers"],
         "NFL": ["Chiefs", "Eagles", "Cowboys", "Ravens", "49ers", "Bills"],
@@ -558,7 +552,6 @@ def generate_fallback_recommendation(is_parlay=False):
 def verify_api_keys():
     """Verify that required API keys are set."""
     missing_keys = []
-    
     if not API_KEY:
         missing_keys.append("ODDS_API_KEY")
     if not OPENAI_API_KEY:
@@ -638,7 +631,6 @@ def fetch_odds(
         "markets": markets,
         "regions": regions
     }
-    
     try:
         response = requests.get(base_url, params=params, timeout=10)
         response.raise_for_status()
@@ -658,17 +650,14 @@ def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, An
     """
     base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchplayers.php"
     params = {"p": sport.lower()}
-    
     try:
         resp = requests.get(base_url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        
         # Check if the response contains player data
         if not data or "player" not in data or not data["player"]:
             logger.warning(f"TheSportsDB API returned no player data for {sport}")
             return []
-        
         return data.get("player", [])
     except requests.RequestException as e:
         logger.error(f"TheSportsDB request failed: {str(e)}")
@@ -687,7 +676,6 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
         List of formatted game descriptions with detailed context
     """
     game_descriptions = []
-    
     # Get today's date for context
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     
@@ -800,7 +788,6 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                 if sheets_manager:
                     try:
                         logger.info(f"Storing player prop for {name} - {bet_type} in Player Props Sheet")
-                        
                         # Figure out which team the player is on (approximate)
                         player_team = home_team
                         if name.lower() in away_team.lower() or away_team.lower() in name.lower():
@@ -1515,9 +1502,11 @@ async def get_games(
     return formatted_data if formatted_data else {"error": "No games found."}
 
 @app.get("/best-pick")
-async def get_best_pick():
+async def get_best_pick(fresh: bool = Query(False, description="Force fresh recommendation")):
     """
     Get the best straight bet recommendation across all sports.
+    Args:
+        fresh: If True, bypass cache and generate a new recommendation
     Returns:
         Dictionary with best pick recommendation
     """
@@ -1530,8 +1519,8 @@ async def get_best_pick():
         
         cache_key = "best_pick:all"
         
-        # Check if we have cached data
-        if cache_key in bets_cache:
+        # Check if we have cached data and fresh parameter is not set
+        if not fresh and cache_key in bets_cache:
             logger.info("Returning cached best pick recommendation")
             return {"best_pick": bets_cache[cache_key]}
         
@@ -1554,14 +1543,31 @@ async def get_best_pick():
         except Exception as e:
             logger.warning(f"Error in odds fetching process: {str(e)}")
         
+        # Filter to only include games that are still upcoming
+        current_time = datetime.now(timezone.utc)
+        upcoming_desc = []
+        for desc in all_desc:
+            # Check if the game is in the future
+            is_upcoming = True
+            if "on " in desc:
+                try:
+                    date_part = desc.split("on ")[1].split(" |")[0]
+                    game_time = datetime.strptime(date_part, "%Y-%m-%d at %H:%M UTC").replace(tzinfo=timezone.utc)
+                    if game_time < current_time:
+                        is_upcoming = False
+                except Exception:
+                    # If we can't parse the date, assume it's upcoming
+                    pass
+            if is_upcoming:
+                upcoming_desc.append(desc)
+        
         # If we have game descriptions, try to generate a recommendation with AI
-        if all_desc:
+        if upcoming_desc:
             try:
-                result = generate_best_pick_with_ai(all_desc)
+                result = generate_best_pick_with_ai(upcoming_desc)
                 # Check if we got a valid result
                 if result and not result.get("error"):
                     bets_cache[cache_key] = result
-                    
                     # Update metrics for new prediction
                     if sheets_manager:
                         try:
@@ -1575,7 +1581,6 @@ async def get_best_pick():
                             sheets_manager.update_metrics(metrics_data)
                         except Exception as e:
                             logger.error(f"Error updating metrics for API usage: {str(e)}")
-                    
                     return {"best_pick": result}
             except Exception as e:
                 logger.error(f"Error generating AI recommendation: {str(e)}")
@@ -1586,13 +1591,11 @@ async def get_best_pick():
         logger.warning("Using fallback recommendation mechanism for best_pick")
         fallback_result = generate_fallback_recommendation(is_parlay=False)
         bets_cache[cache_key] = fallback_result
-        
         return {"best_pick": fallback_result}
     except Exception as e:
         # Catch-all exception handler to ensure we always return something
         logger.error(f"Unhandled error in get_best_pick: {str(e)}")
         logger.error(traceback.format_exc())
-        
         # Emergency fallback
         emergency_fallback = {
             "recommendation": "NBA Lakers",
@@ -1601,13 +1604,14 @@ async def get_best_pick():
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": "NBA"
         }
-        
         return {"best_pick": emergency_fallback}
 
 @app.get("/best-parlay")
-async def get_best_parlay():
+async def get_best_parlay(fresh: bool = Query(False, description="Force fresh recommendation")):
     """
     Get the best parlay bet recommendation across all sports.
+    Args:
+        fresh: If True, bypass cache and generate a new recommendation
     Returns:
         Dictionary with best parlay recommendation
     """
@@ -1620,8 +1624,8 @@ async def get_best_parlay():
         
         cache_key = "best_parlay:all"
         
-        # Check if we have cached data
-        if cache_key in bets_cache:
+        # Check if we have cached data and fresh parameter is not set
+        if not fresh and cache_key in bets_cache:
             logger.info("Returning cached best parlay recommendation")
             return {"best_parlay": bets_cache[cache_key]}
         
@@ -1642,14 +1646,31 @@ async def get_best_parlay():
         except Exception as e:
             logger.warning(f"Error in odds fetching process: {str(e)}")
         
+        # Filter to only include games that are still upcoming
+        current_time = datetime.now(timezone.utc)
+        upcoming_desc = []
+        for desc in all_desc:
+            # Check if the game is in the future
+            is_upcoming = True
+            if "on " in desc:
+                try:
+                    date_part = desc.split("on ")[1].split(" |")[0]
+                    game_time = datetime.strptime(date_part, "%Y-%m-%d at %H:%M UTC").replace(tzinfo=timezone.utc)
+                    if game_time < current_time:
+                        is_upcoming = False
+                except Exception:
+                    # If we can't parse the date, assume it's upcoming
+                    pass
+            if is_upcoming:
+                upcoming_desc.append(desc)
+        
         # If we have game descriptions, try to generate a recommendation with AI
-        if all_desc:
+        if upcoming_desc:
             try:
-                result = generate_best_parlay_with_ai(all_desc)
+                result = generate_best_parlay_with_ai(upcoming_desc)
                 # Check if we got a valid result
                 if result and not result.get("error"):
                     bets_cache[cache_key] = result
-                    
                     # Update metrics for API usage
                     if sheets_manager and result and not result.get("error"):
                         try:
@@ -1662,7 +1683,6 @@ async def get_best_parlay():
                             sheets_manager.update_metrics(metrics_data)
                         except Exception as e:
                             logger.error(f"Error updating metrics for API usage: {str(e)}")
-                    
                     return {"best_parlay": result}
             except Exception as e:
                 logger.error(f"Error generating AI recommendation: {str(e)}")
@@ -1673,13 +1693,11 @@ async def get_best_parlay():
         logger.warning("Using fallback recommendation mechanism for best_parlay")
         fallback_result = generate_fallback_recommendation(is_parlay=True)
         bets_cache[cache_key] = fallback_result
-        
         return {"best_parlay": fallback_result}
     except Exception as e:
         # Catch-all exception handler to ensure we always return something
         logger.error(f"Unhandled error in get_best_parlay: {str(e)}")
         logger.error(traceback.format_exc())
-        
         # Emergency fallback
         emergency_fallback = {
             "recommendation": "NBA Lakers & NFL Chiefs",
@@ -1688,17 +1706,18 @@ async def get_best_parlay():
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": "Mixed"
         }
-        
         return {"best_parlay": emergency_fallback}
 
 @app.get("/sport-best-pick")
 async def get_sport_best_pick(
-    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
+    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)"),
+    fresh: bool = Query(False, description="Force fresh recommendation")
 ):
     """
     Get the best straight bet recommendation for a specific sport.
     Args:
         sport: Sport code to get recommendations for
+        fresh: If True, bypass cache and generate a new recommendation
     Returns:
         Dictionary with best pick recommendation for the sport
     """
@@ -1707,8 +1726,8 @@ async def get_sport_best_pick(
     
     cache_key = f"best_pick:{sport}"
     
-    # Check if we have cached data
-    if cache_key in bets_cache:
+    # Check if we have cached data and fresh parameter is not set
+    if not fresh and cache_key in bets_cache:
         logger.info(f"Returning cached best pick for {sport}")
         return {"sport_best_pick": bets_cache[cache_key]}
     
@@ -1721,11 +1740,27 @@ async def get_sport_best_pick(
     if not data:
         return {"error": f"No games found for {sp}."}
     
-    # Don't store games anymore, just format them for AI
+    # Filter for upcoming games only
+    current_time = datetime.now(timezone.utc)
+    upcoming_games = []
     for game in data:
+        if game.get("commence_time"):
+            try:
+                game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
+                if game_time > current_time:
+                    upcoming_games.append(game)
+            except Exception:
+                # If we can't parse the time, include it anyway
+                upcoming_games.append(game)
+        else:
+            # If no time specified, include it
+            upcoming_games.append(game)
+    
+    # Don't store games anymore, just format them for AI
+    for game in upcoming_games:
         game["sport"] = sp
     
-    result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
+    result = generate_best_pick_with_ai(format_odds_for_ai(upcoming_games, sp))
     bets_cache[cache_key] = result
     
     # Update metrics for API usage
@@ -1745,12 +1780,14 @@ async def get_sport_best_pick(
 
 @app.get("/sport-best-parlay")
 async def get_sport_best_parlay(
-    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
+    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)"),
+    fresh: bool = Query(False, description="Force fresh recommendation")
 ):
     """
     Get the best parlay bet recommendation for a specific sport.
     Args:
         sport: Sport code to get recommendations for
+        fresh: If True, bypass cache and generate a new recommendation
     Returns:
         Dictionary with best parlay recommendation for the sport
     """
@@ -1759,8 +1796,8 @@ async def get_sport_best_parlay(
     
     cache_key = f"best_parlay:{sport}"
     
-    # Check if we have cached data
-    if cache_key in bets_cache:
+    # Check if we have cached data and fresh parameter is not set
+    if not fresh and cache_key in bets_cache:
         logger.info(f"Returning cached best parlay for {sport}")
         return {"sport_best_parlay": bets_cache[cache_key]}
     
@@ -1773,11 +1810,27 @@ async def get_sport_best_parlay(
     if not data:
         return {"error": f"No games found for {sp}."}
     
-    # Don't store games anymore, just format them for AI
+    # Filter for upcoming games only
+    current_time = datetime.now(timezone.utc)
+    upcoming_games = []
     for game in data:
+        if game.get("commence_time"):
+            try:
+                game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
+                if game_time > current_time:
+                    upcoming_games.append(game)
+            except Exception:
+                # If we can't parse the time, include it anyway
+                upcoming_games.append(game)
+        else:
+            # If no time specified, include it
+            upcoming_games.append(game)
+    
+    # Don't store games anymore, just format them for AI
+    for game in upcoming_games:
         game["sport"] = sp
     
-    result = generate_best_parlay_with_ai(format_odds_for_ai(data, sp))
+    result = generate_best_parlay_with_ai(format_odds_for_ai(upcoming_games, sp))
     bets_cache[cache_key] = result
     
     # Update metrics for API usage
@@ -1797,12 +1850,14 @@ async def get_sport_best_parlay(
 
 @app.get("/player-best-bet")
 async def get_player_best_bet(
-    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)")
+    sport: str = Query(..., description="Sport code (e.g., NBA, NFL)"),
+    fresh: bool = Query(False, description="Force fresh recommendation")
 ):
     """
     Get the best player prop bet recommendation for a specific sport.
     Args:
         sport: Sport code to get recommendations for
+        fresh: If True, bypass cache and generate a new recommendation
     Returns:
         Dictionary with best player bet recommendation
     """
@@ -1814,8 +1869,8 @@ async def get_player_best_bet(
     
     cache_key = f"best_player_bet:{sport}"
     
-    # Check if we have cached data
-    if cache_key in bets_cache:
+    # Check if we have cached data and fresh parameter is not set
+    if not fresh and cache_key in bets_cache:
         logger.info(f"Returning cached best player bet for {sport}")
         return {"best_player_bet": bets_cache[cache_key]}
     
@@ -1833,7 +1888,24 @@ async def get_player_best_bet(
         odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
         if odds_data:
             logger.info(f"Retrieved player props from odds API for {sport}: {len(odds_data)} games")
-            player_descriptions = format_player_odds_for_ai(odds_data, sp)
+            
+            # Filter for upcoming games only
+            current_time = datetime.now(timezone.utc)
+            upcoming_games = []
+            for game in odds_data:
+                if game.get("commence_time"):
+                    try:
+                        game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
+                        if game_time > current_time:
+                            upcoming_games.append(game)
+                    except Exception:
+                        # If we can't parse the time, include it anyway
+                        upcoming_games.append(game)
+                else:
+                    # If no time specified, include it
+                    upcoming_games.append(game)
+            
+            player_descriptions = format_player_odds_for_ai(upcoming_games, sp)
             if player_descriptions:
                 success_source = "Odds API"
                 logger.info(f"Successfully formatted {len(player_descriptions)} player props from Odds API")
@@ -1852,20 +1924,16 @@ async def get_player_best_bet(
             thesports_data = fetch_player_data_thesportsdb(THESPORTSDB_API_KEY, sp)
             if thesports_data and isinstance(thesports_data, list):
                 logger.info(f"Retrieved {len(thesports_data)} players from TheSportsDB for {sport}")
-                
                 # Process players and store in Player Props Sheet
                 for player in thesports_data:
                     if not isinstance(player, dict):
                         continue
-                    
                     name = player.get("strPlayer", "")
                     position = player.get("strPosition", "")
                     team = player.get("strTeam", "")
-                    
                     if name and (position or team):
                         # Add to descriptions for AI
                         player_descriptions.append(f"{sp}: {name} - Position: {position}, Team: {team}")
-                        
                         # Store in Player Props Sheet
                         if sheets_manager:
                             try:
@@ -1902,21 +1970,19 @@ async def get_player_best_bet(
             # Create a fallback prompt for OpenAI to generate plausible player props
             sport_full_name = "Baseball" if sp == "MLB" else "Soccer"
             league_name = "Major League Baseball" if sp == "MLB" else "Major League Soccer"
-            
             fallback_prompt = f"""
-            Generate 5 realistic player prop bets for today's {league_name} ({sp}) games.
-            For each player, include:
-            1. Player name (must be a real current {sp} player)
-            2. Their team
-            3. The opponent team
-            4. A realistic prop bet (e.g., hits, strikeouts for MLB; goals, assists for MLS)
-            5. A realistic line for that prop
-            6. Realistic odds
-            Format each player prop as:
-            "{sp}: [Player Name] - [Prop Type] [Line] in [Team] vs [Opponent Team] | Odds: [Odds] ([Implied Probability]% implied probability) | Teams: [Team] (Home), [Opponent] (Away)"
-            Make these as realistic and accurate as possible for today's actual games.
-            """
-            
+Generate 5 realistic player prop bets for today's {league_name} ({sp}) games.
+For each player, include:
+1. Player name (must be a real current {sp} player)
+2. Their team
+3. The opponent team
+4. A realistic prop bet (e.g., hits, strikeouts for MLB; goals, assists for MLS)
+5. A realistic line for that prop
+6. Realistic odds
+Format each player prop as:
+"{sp}: [Player Name] - [Prop Type] [Line] in [Team] vs [Opponent Team] | Odds: [Odds] ([Implied Probability]% implied probability) | Teams: [Team] (Home), [Opponent] (Away)"
+Make these as realistic and accurate as possible for today's actual games.
+"""
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -1927,11 +1993,9 @@ async def get_player_best_bet(
                     {"role": "user", "content": fallback_prompt}
                 ]
             )
-            
             # Extract player props from OpenAI response
             fallback_text = response.choices[0].message.content.strip()
             player_descriptions = [line.strip() for line in fallback_text.split('\n') if sp in line and '-' in line]
-            
             if player_descriptions:
                 success_source = "OpenAI Fallback"
                 logger.info(f"Generated {len(player_descriptions)} player props using OpenAI fallback for {sp}")
@@ -1953,21 +2017,20 @@ async def get_player_best_bet(
     # Add the data source to the result
     if isinstance(result, dict) and not result.get("error"):
         result["data_source"] = success_source
-    
-    bets_cache[cache_key] = result
-    
-    # Update metrics for API usage
-    if sheets_manager and result and not result.get("error"):
-        try:
-            metrics_data = {
-                "type": "api_usage",
-                "value": 1,
-                "sport": sp,
-                "details": f"player_best_bet endpoint (source: {success_source})"
-            }
-            sheets_manager.update_metrics(metrics_data)
-        except Exception as e:
-            logger.error(f"Error updating metrics for API usage: {str(e)}")
+        bets_cache[cache_key] = result
+        
+        # Update metrics for API usage
+        if sheets_manager and result and not result.get("error"):
+            try:
+                metrics_data = {
+                    "type": "api_usage",
+                    "value": 1,
+                    "sport": sp,
+                    "details": f"player_best_bet endpoint (source: {success_source})"
+                }
+                sheets_manager.update_metrics(metrics_data)
+            except Exception as e:
+                logger.error(f"Error updating metrics for API usage: {str(e)}")
     
     return {"best_player_bet": result}
 
@@ -2008,7 +2071,6 @@ async def record_outcome(outcome_data: OutcomeData):
     
     try:
         logger.info(f"Recording outcome for prediction {outcome_data.prediction_id}: {outcome_data.outcome}")
-        
         # Convert Pydantic model to dictionary
         outcome_dict = outcome_data.dict()
         result = sheets_manager.store_outcome(outcome_dict)
@@ -2061,7 +2123,6 @@ async def update_metrics(
             "sport": sport,
             "details": details or ""
         }
-        
         success = sheets_manager.update_metrics(metrics_data)
         
         if success:
@@ -2128,7 +2189,6 @@ async def check_service_account():
         creds_json = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
         service_account_email = creds_json.get("client_email", "Not found")
         project_id = creds_json.get("project_id", "Not found")
-        
         return {
             "service_account_email": service_account_email,
             "project_id": project_id,
@@ -2158,14 +2218,12 @@ async def track_interaction(
     if sheets_manager:
         try:
             logger.info(f"Tracking interaction: {interaction_type} for prediction {prediction_id}")
-            
             interaction_data = {
                 "prediction_id": prediction_id,
                 "interaction_type": interaction_type,
                 "page": page,
                 "device_type": device_type
             }
-            
             result = sheets_manager.store_user_interaction(interaction_data)
             
             if result:
@@ -2263,7 +2321,6 @@ async def test_all_sheets():
     
     # Overall status
     all_success = all(result["status"] == "success" for result in results.values())
-    
     return {
         "overall_status": "success" if all_success else "error",
         "sheets": results
@@ -2432,7 +2489,6 @@ async def verify_sheets():
     
     # Overall status
     all_success = all(result["status"] == "success" for result in results.values())
-    
     return {
         "overall_status": "success" if all_success else "error",
         "test_timestamp": datetime.now().isoformat(),
@@ -2517,7 +2573,6 @@ async def get_simple_pick():
         "last_updated": datetime.now(timezone.utc).isoformat(),
         "sport": "TEST"
     }
-    
     return {"best_pick": test_pick}
 
 if __name__ == "__main__":
