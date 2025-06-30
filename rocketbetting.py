@@ -479,7 +479,8 @@ SPORTS_BASE_URLS: Dict[str, str] = {
     "CFB": "https://api.the-odds-api.com/v4/sports/americanfootball_ncaaf/odds",
     "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
     "MLB": "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds",
-    "NHL": "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
+    "NHL": "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds",
+    "TENNIS": "https://api.the-odds-api.com/v4/sports/tennis_atp/odds"  # Added Tennis
 }
 
 # Define readable sport names
@@ -489,7 +490,8 @@ SPORT_DISPLAY_NAMES: Dict[str, str] = {
     "CFB": "College Football (NCAAF)",
     "MLS": "Soccer (MLS)",
     "MLB": "Baseball (MLB)",
-    "NHL": "Hockey (NHL)"
+    "NHL": "Hockey (NHL)",
+    "TENNIS": "Tennis (ATP)"  # Added Tennis
 }
 
 # Create caches (TTL in seconds)
@@ -505,13 +507,14 @@ def generate_fallback_recommendation(is_parlay=False):
         Dictionary with recommendation details
     """
     # Sports and teams for fallback recommendations
-    sports = ["NBA", "NFL", "MLB", "NHL"]
+    sports = ["NBA", "NFL", "MLB", "NHL", "TENNIS"]  # Added Tennis
     sport = random.choice(sports)
     teams = {
         "NBA": ["Lakers", "Celtics", "Warriors", "Bucks", "Heat", "76ers"],
         "NFL": ["Chiefs", "Eagles", "Cowboys", "Ravens", "49ers", "Bills"],
         "MLB": ["Yankees", "Dodgers", "Red Sox", "Braves", "Cubs", "Astros"],
-        "NHL": ["Maple Leafs", "Bruins", "Rangers", "Avalanche", "Lightning", "Oilers"]
+        "NHL": ["Maple Leafs", "Bruins", "Rangers", "Avalanche", "Lightning", "Oilers"],
+        "TENNIS": ["Djokovic", "Alcaraz", "Nadal", "Medvedev", "Zverev", "Sinner"]  # Added Tennis players
     }
     
     # Get teams for the selected sport
@@ -529,23 +532,44 @@ def generate_fallback_recommendation(is_parlay=False):
         else:
             team2 = random.choice(remaining_teams)
         
-        recommendation = {
-            "recommendation": f"{team1} & {team2}",
-            "explanation": f"This parlay offers strong value based on recent performance. {team1} has shown excellent form in their last 5 games with improvements in offensive efficiency. {team2} has a favorable matchup and has consistently covered the spread in similar situations.",
-            "confidence": random.randint(60, 70),
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sport
-        }
+        # Add tennis-specific explanation
+        if sport == "TENNIS":
+            recommendation = {
+                "recommendation": f"{team1} & {team2}",
+                "explanation": f"This parlay offers strong value based on recent performance. {team1} has shown excellent form in recent tournaments and matchups. {team2} has a favorable matchup in terms of playing style and surface conditions.",
+                "confidence": random.randint(60, 70),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": sport
+            }
+        else:
+            recommendation = {
+                "recommendation": f"{team1} & {team2}",
+                "explanation": f"This parlay offers strong value based on recent performance. {team1} has shown excellent form in their last 5 games with improvements in offensive efficiency. {team2} has a favorable matchup and has consistently covered the spread in similar situations.",
+                "confidence": random.randint(60, 70),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": sport
+            }
     else:
         # Create a straight bet recommendation
         team = random.choice(sport_teams)
-        recommendation = {
-            "recommendation": team,
-            "explanation": f"{team} presents strong betting value in their upcoming matchup. They've been performing well offensively and have a statistical advantage against their opponent's defense. Recent team news and injury reports suggest they'll be at full strength.",
-            "confidence": random.randint(70, 85),
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": sport
-        }
+        
+        # Add tennis-specific explanation
+        if sport == "TENNIS":
+            recommendation = {
+                "recommendation": team,
+                "explanation": f"{team} presents strong betting value in their upcoming match. They've been performing well in recent tournaments and have a favorable matchup in terms of playing style and surface conditions. Recent form suggests they're at peak performance level.",
+                "confidence": random.randint(70, 85),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": sport
+            }
+        else:
+            recommendation = {
+                "recommendation": team,
+                "explanation": f"{team} presents strong betting value in their upcoming matchup. They've been performing well offensively and have a statistical advantage against their opponent's defense. Recent team news and injury reports suggest they'll be at full strength.",
+                "confidence": random.randint(70, 85),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": sport
+            }
     
     return recommendation
 
@@ -712,6 +736,8 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
             additional_context = f" | Context: MLS soccer match{', today' if is_today else ''}"
         elif sport == "CFB":
             additional_context = f" | Context: College football game{', today' if is_today else ''}"
+        elif sport == "TENNIS":
+            additional_context = f" | Context: Tennis match{', today' if is_today else ''}"  # Added tennis context
         
         if game.get("bookmakers"):
             bookmaker = game["bookmakers"][0]
@@ -729,12 +755,21 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
                             home_implied_prob = round(100 / home_odds, 1)
                             away_implied_prob = round(100 / away_odds, 1)
                             
-                            game_descriptions.append(
-                                f"{sport}: {home_team} (Home) vs {away_team} (Away){game_time} | "
-                                f"Odds: {home_team}: {home_odds} ({home_implied_prob}% implied), "
-                                f"{away_team}: {away_odds} ({away_implied_prob}% implied) | "
-                                f"Source: {bookmaker_name}{additional_context}"
-                            )
+                            # For tennis, we'll call them Player 1 and Player 2 instead of Home/Away
+                            if sport == "TENNIS":
+                                game_descriptions.append(
+                                    f"{sport}: {home_team} vs {away_team}{game_time} | "
+                                    f"Odds: {home_team}: {home_odds} ({home_implied_prob}% implied), "
+                                    f"{away_team}: {away_odds} ({away_implied_prob}% implied) | "
+                                    f"Source: {bookmaker_name}{additional_context}"
+                                )
+                            else:
+                                game_descriptions.append(
+                                    f"{sport}: {home_team} (Home) vs {away_team} (Away){game_time} | "
+                                    f"Odds: {home_team}: {home_odds} ({home_implied_prob}% implied), "
+                                    f"{away_team}: {away_odds} ({away_implied_prob}% implied) | "
+                                    f"Source: {bookmaker_name}{additional_context}"
+                                )
     
     return game_descriptions
 
@@ -753,7 +788,12 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
         home_team = game.get("home_team", "")
         away_team = game.get("away_team", "")
         commence_time = game.get("commence_time", "")
-        matchup = f"{home_team} vs {away_team}" if home_team and away_team else ""
+        
+        # For tennis, format the matchup differently since it's player vs player
+        if sport == "TENNIS":
+            matchup = f"{home_team} vs {away_team}" if home_team and away_team else ""
+        else:
+            matchup = f"{home_team} vs {away_team}" if home_team and away_team else ""
         
         # Format game time
         game_time = ""
@@ -778,20 +818,33 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                 line_str = f" ({line})" if line else ""
                 implied_prob = round(100 / odds, 1) if odds else 0
                 
-                player_descriptions.append(
-                    f"{sport}: {name} - {bet_type}{line_str} in {matchup}{game_time} | "
-                    f"Odds: {odds} ({implied_prob}% implied probability) | "
-                    f"Teams: {home_team} (Home), {away_team} (Away)"
-                )
+                # Tennis-specific context
+                if sport == "TENNIS":
+                    player_descriptions.append(
+                        f"{sport}: {name} - {bet_type}{line_str} in {matchup}{game_time} | "
+                        f"Odds: {odds} ({implied_prob}% implied probability) | "
+                        f"Match: {matchup}"
+                    )
+                else:
+                    player_descriptions.append(
+                        f"{sport}: {name} - {bet_type}{line_str} in {matchup}{game_time} | "
+                        f"Odds: {odds} ({implied_prob}% implied probability) | "
+                        f"Teams: {home_team} (Home), {away_team} (Away)"
+                    )
                 
                 # Store player prop in Google Sheets
                 if sheets_manager:
                     try:
                         logger.info(f"Storing player prop for {name} - {bet_type} in Player Props Sheet")
-                        # Figure out which team the player is on (approximate)
-                        player_team = home_team
-                        if name.lower() in away_team.lower() or away_team.lower() in name.lower():
-                            player_team = away_team
+                        # For tennis, determine which player is which
+                        player_team = ""
+                        if sport == "TENNIS":
+                            player_team = name  # In tennis, the player is their own "team"
+                        else:
+                            # Figure out which team the player is on (approximate)
+                            player_team = home_team
+                            if name.lower() in away_team.lower() or away_team.lower() in name.lower():
+                                player_team = away_team
                         
                         over_odds = ""
                         under_odds = ""
@@ -886,6 +939,18 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
+    # Add tennis-specific analysis guidance
+    sport_specific_guidance = ""
+    if sport_hint == "TENNIS":
+        sport_specific_guidance = (
+            "\n\nFor tennis specifically, consider these additional factors:"
+            "\n1. Surface type and player's historical performance on this surface"
+            "\n2. Recent form in tournaments (last 2-3 tournaments)"
+            "\n3. Head-to-head matchup history"
+            "\n4. Physical condition and fatigue levels (if known)"
+            "\n5. Tournament stage and player's motivation level"
+        )
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
@@ -897,6 +962,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
         "\n6. Statistical matchups and advantages"
         "\n7. Value compared to the offered odds"
+        + sport_specific_guidance +  # Add tennis guidance if relevant
         "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
         '\n{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Detailed reasoning with specific data points]", "confidence": [0-100]}'
         "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
@@ -1002,6 +1068,17 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
+    # Add tennis-specific analysis guidance for parlays
+    sport_specific_guidance = ""
+    if sport_hint == "TENNIS":
+        sport_specific_guidance = (
+            "\n\nFor tennis specifically, consider these additional factors:"
+            "\n1. Surface type compatibility for all players in the parlay"
+            "\n2. Tournament schedule and potential fatigue factors"
+            "\n3. Player's historical consistency in similar matchups"
+            "\n4. Avoiding matches with high variance or inconsistent players"
+        )
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
@@ -1013,6 +1090,7 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         "\n5. Situational advantages (back-to-back games, travel fatigue, etc.)"
         "\n6. Statistical matchups and advantages"
         "\n7. Diversification of risk (avoid multiple games with similar risk profiles)"
+        + sport_specific_guidance +  # Add tennis guidance if relevant
         "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
         '\n{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Detailed reasoning with specific data points for EACH pick]", "confidence": [0-100]}'
         "\n\nNote: Parlay confidence should generally be lower than straight bets due to compounding risk. Only assign confidence scores above 70 in extraordinary circumstances."
@@ -1118,6 +1196,18 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
     
+    # Add tennis-specific analysis guidance for player props
+    sport_specific_guidance = ""
+    if sport_hint == "TENNIS":
+        sport_specific_guidance = (
+            "\n\nFor tennis specifically, consider these additional factors for player props:"
+            "\n1. Player's historical performance on the current surface (clay, grass, hard court)"
+            "\n2. Recent serving and return statistics"
+            "\n3. Performance in similar tournament stages"
+            "\n4. Fatigue from previous matches and tournament schedule"
+            "\n5. Head-to-head history against similar playing styles"
+        )
+    
     prompt = (
         "You are an expert sports betting analyst specializing in player performance statistics and trends. "
         "Analyze the following player prop betting options and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
@@ -1129,6 +1219,7 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
         "\n5. Situational factors (minutes restrictions, injuries to teammates, etc.)"
         "\n6. Statistical anomalies that may regress to the mean"
         "\n7. Value compared to the offered odds"
+        + sport_specific_guidance +  # Add tennis guidance if relevant
         "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
         '\n{"sport": "[Sport Name]", "player_bet": "[Player Name] on [Bet Type]", "explanation": "[Detailed reasoning with specific statistical evidence]", "confidence": [0-100]}'
         "\n\nYour explanation must include specific statistical data and clear reasoning."
@@ -1963,14 +2054,30 @@ async def get_player_best_bet(
             logger.error(f"Error processing TheSportsDB data: {str(e)}")
             logger.error(traceback.format_exc())
     
-    # 3) If still none, fallback to OpenAI for MLB and MLS
-    if not player_descriptions and sp in ["MLB", "MLS"]:
+    # 3) If still none, fallback to OpenAI for Tennis, MLB and MLS
+    if not player_descriptions and sp in ["TENNIS", "MLB", "MLS"]:
         logger.warning(f"No player data available for {sp} from APIs, using OpenAI fallback")
         try:
             # Create a fallback prompt for OpenAI to generate plausible player props
-            sport_full_name = "Baseball" if sp == "MLB" else "Soccer"
-            league_name = "Major League Baseball" if sp == "MLB" else "Major League Soccer"
-            fallback_prompt = f"""
+            sport_full_name = "Tennis" if sp == "TENNIS" else "Baseball" if sp == "MLB" else "Soccer"
+            league_name = "ATP Tour" if sp == "TENNIS" else "Major League Baseball" if sp == "MLB" else "Major League Soccer"
+            
+            # Tennis-specific prompt
+            if sp == "TENNIS":
+                fallback_prompt = f"""
+Generate 5 realistic player prop bets for today's {league_name} ({sp}) matches.
+For each player, include:
+1. Player name (must be a real current {sp} player)
+2. Their opponent
+3. A realistic prop bet (e.g., total aces, games won, set betting)
+4. A realistic line for that prop
+5. Realistic odds
+Format each player prop as:
+"{sp}: [Player Name] - [Prop Type] [Line] in [Player] vs [Opponent] | Odds: [Odds] ([Implied Probability]% implied probability) | Match: [Player] vs [Opponent]"
+Make these as realistic and accurate as possible for today's actual matches.
+"""
+            else:
+                fallback_prompt = f"""
 Generate 5 realistic player prop bets for today's {league_name} ({sp}) games.
 For each player, include:
 1. Player name (must be a real current {sp} player)
@@ -1983,6 +2090,7 @@ Format each player prop as:
 "{sp}: [Player Name] - [Prop Type] [Line] in [Team] vs [Opponent Team] | Odds: [Odds] ([Implied Probability]% implied probability) | Teams: [Team] (Home), [Opponent] (Away)"
 Make these as realistic and accurate as possible for today's actual games.
 """
+
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
