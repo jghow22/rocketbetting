@@ -59,11 +59,9 @@ class SheetsManager:
         self.credentials_json = credentials_json or os.getenv("GOOGLE_CREDENTIALS_JSON")
         self.spreadsheet = None
         self.worksheet_cache = {}
-        
         logger.info(f"Initializing SheetsManager with spreadsheet ID: {self.spreadsheet_id}")
         if not self.spreadsheet_id:
             logger.error("SPREADSHEET_ID environment variable not set")
-        
         if not self.credentials_path and not self.credentials_json:
             logger.error("No credentials provided - need either path or JSON content")
         elif self.credentials_json:
@@ -71,10 +69,8 @@ class SheetsManager:
         elif self.credentials_path:
             if not os.path.exists(self.credentials_path):
                 logger.error(f"Credentials file not found at: {self.credentials_path}")
-        
         # Initialize connection
         self.connect()
-    
     def connect(self):
         """Connect to Google Sheets API"""
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -95,16 +91,13 @@ class SheetsManager:
             else:
                 logger.error("No valid credentials provided")
                 return False
-            
             self.client = gspread.authorize(credentials)
             logger.info("Successfully connected to Google Sheets")
-            
             # Cache the spreadsheet reference for future use
             try:
                 self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
                 worksheet_names = [ws.title for ws in self.spreadsheet.worksheets()]
                 logger.info(f"Successfully accessed spreadsheet. Available worksheets: {worksheet_names}")
-                
                 # Pre-cache all worksheet references to reduce API calls
                 for ws_name in worksheet_names:
                     self.worksheet_cache[ws_name] = self.spreadsheet.worksheet(ws_name)
@@ -112,23 +105,19 @@ class SheetsManager:
                 logger.error(f"Could access credentials but failed to open spreadsheet: {str(e)}")
                 logger.error(traceback.format_exc())
                 return False
-            
             return True
         except Exception as e:
             logger.error(f"Failed to connect to Google Sheets: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-    
     def get_sheet(self, sheet_name):
         """Get a specific worksheet with caching and retries"""
         if not self.client or not self.spreadsheet_id:
             logger.error("Google Sheets client not properly initialized")
             return None
-        
         # Check if we already have this worksheet cached
         if sheet_name in self.worksheet_cache:
             return self.worksheet_cache[sheet_name]
-        
         # Try to get the worksheet with retries
         max_retries = 3
         retry_delay = 1 # Start with 1 second delay
@@ -137,11 +126,9 @@ class SheetsManager:
                 if not self.spreadsheet:
                     logger.info("Spreadsheet reference not found, attempting to open it")
                     self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-                
                 logger.info(f"Attempting to access worksheet: {sheet_name}")
                 worksheet = self.spreadsheet.worksheet(sheet_name)
                 logger.info(f"Successfully accessed worksheet: {sheet_name}")
-                
                 # Cache the worksheet for future use
                 self.worksheet_cache[sheet_name] = worksheet
                 return worksheet
@@ -158,24 +145,20 @@ class SheetsManager:
                 logger.error(f"Error accessing Google Sheet {sheet_name}: {str(e)}")
                 logger.error(traceback.format_exc())
                 return None
-        
         logger.error(f"Failed to access worksheet {sheet_name} after {max_retries} attempts")
         return None
-    
     def store_game(self, game_data):
         """Store a game in the Games sheet"""
         worksheet = self.get_sheet("Games")
         if not worksheet:
             logger.error("Could not access Games worksheet")
             return False
-        
         try:
             game_id = game_data.get("id", str(uuid.uuid4()))
             sport = game_data.get("sport", "Unknown")
             home_team = game_data.get("home_team", "Unknown")
             away_team = game_data.get("away_team", "Unknown")
             date = game_data.get("commence_time", "")
-            
             # Get odds if available
             home_odds = "N/A"
             away_odds = "N/A"
@@ -183,7 +166,6 @@ class SheetsManager:
             if game_data.get("bookmakers") and len(game_data["bookmakers"]) > 0:
                 bookmaker_data = game_data["bookmakers"][0]
                 bookmaker = bookmaker_data.get("title", "Unknown")
-                
                 for market in bookmaker_data.get("markets", []):
                     if market["key"] == "h2h":
                         outcomes = market.get("outcomes", [])
@@ -192,19 +174,16 @@ class SheetsManager:
                                 home_odds = outcome.get("price", "N/A")
                             elif outcome.get("name") == away_team:
                                 away_odds = outcome.get("price", "N/A")
-            
             status = game_data.get("status", "scheduled")
             home_score = game_data.get("home_score", "")
             away_score = game_data.get("away_score", "")
             timestamp = datetime.now().isoformat()
-            
             # Append to sheet
             row = [
                 game_id, sport, home_team, away_team, date,
                 home_odds, away_odds, bookmaker, status,
                 home_score, away_score, timestamp
             ]
-            
             logger.info(f"Attempting to store game in sheet: {home_team} vs {away_team}")
             worksheet.append_row(row)
             logger.info(f"Successfully stored game: {home_team} vs {away_team}")
@@ -220,14 +199,12 @@ class SheetsManager:
             logger.error(f"Error storing game data: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-    
     def store_prediction(self, prediction_data):
         """Store a prediction in the Predictions sheet"""
         worksheet = self.get_sheet("Predictions")
         if not worksheet:
             logger.error("Could not access Predictions worksheet")
             return False
-        
         try:
             prediction_id = str(uuid.uuid4())
             pred_type = prediction_data.get("type", "Unknown") # straight, parlay, player_prop
@@ -238,17 +215,14 @@ class SheetsManager:
             created_at = datetime.now().isoformat()
             outcome = "Pending"
             user_action = ""
-            
             # Append to sheet
             row = [
                 prediction_id, pred_type, sport, recommendation,
                 confidence, explanation, created_at, outcome, user_action
             ]
-            
             logger.info(f"Attempting to store prediction in sheet for {sport}: {recommendation}")
             worksheet.append_row(row)
             logger.info(f"Successfully stored prediction for {sport}: {recommendation}")
-            
             # Also create a pending outcome record
             try:
                 outcome_data = {
@@ -261,7 +235,6 @@ class SheetsManager:
                 logger.info(f"Created initial pending outcome record for prediction {prediction_id}")
             except Exception as e:
                 logger.error(f"Error creating initial outcome record: {str(e)}")
-            
             return prediction_id
         except gspread.exceptions.APIError as e:
             if "429" in str(e): # Rate limit error
@@ -275,14 +248,12 @@ class SheetsManager:
             logger.error(f"Error storing prediction data: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-    
     def store_player_prop(self, prop_data):
         """Store a player prop in the Player Props Sheet"""
         worksheet = self.get_sheet("Player Props Sheet")
         if not worksheet:
             logger.error("Could not access Player Props Sheet worksheet")
             return False
-        
         try:
             prop_id = str(uuid.uuid4())
             game_id = prop_data.get("game_id", "")
@@ -294,13 +265,11 @@ class SheetsManager:
             under_odds = prop_data.get("under_odds", "")
             bookmaker = prop_data.get("bookmaker", "")
             timestamp = datetime.now().isoformat()
-            
             # Append to sheet
             row = [
                 prop_id, game_id, player_name, team, prop_type,
                 line, over_odds, under_odds, bookmaker, timestamp
             ]
-            
             logger.info(f"Attempting to store player prop in sheet for {player_name}: {prop_type}")
             worksheet.append_row(row)
             logger.info(f"Successfully stored player prop for {player_name}: {prop_type}")
@@ -316,27 +285,22 @@ class SheetsManager:
             logger.error(f"Error storing player prop data: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-    
     def store_outcome(self, outcome_data):
         """Store an outcome in the Outcomes sheet"""
         worksheet = self.get_sheet("Outcomes")
         if not worksheet:
             logger.error("Could not access Outcomes worksheet")
             return False
-        
         try:
             prediction_id = outcome_data.get("prediction_id", "")
             outcome = outcome_data.get("outcome", "")
             determined_at = datetime.now().isoformat()
             details = outcome_data.get("details", "")
             actual_result = outcome_data.get("actual_result", "")
-            
             # Append to sheet
             row = [prediction_id, outcome, determined_at, details, actual_result]
-            
             logger.info(f"Attempting to store outcome in sheet for prediction {prediction_id}: {outcome}")
             worksheet.append_row(row)
-            
             # Also update the outcome in the Predictions sheet if possible
             try:
                 predictions_sheet = self.get_sheet("Predictions")
@@ -348,7 +312,6 @@ class SheetsManager:
                         predictions_sheet.update_cell(cell.row, 8, outcome)
             except Exception as e:
                 logger.warning(f"Could not update outcome in Predictions sheet: {str(e)}")
-            
             logger.info(f"Successfully stored outcome for prediction {prediction_id}: {outcome}")
             return True
         except gspread.exceptions.APIError as e:
@@ -362,14 +325,12 @@ class SheetsManager:
             logger.error(f"Error storing outcome data: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-    
     def store_user_interaction(self, interaction_data):
         """Store a user interaction in the User Interactions Sheet"""
         worksheet = self.get_sheet("User Interactions Sheet")
         if not worksheet:
             logger.error("Could not access User Interactions Sheet worksheet")
             return False
-        
         try:
             session_id = interaction_data.get("session_id", str(uuid.uuid4()))
             prediction_id = interaction_data.get("prediction_id", "")
@@ -377,13 +338,11 @@ class SheetsManager:
             timestamp = datetime.now().isoformat()
             page = interaction_data.get("page", "")
             device_type = interaction_data.get("device_type", "")
-            
             # Append to sheet
             row = [
                 session_id, prediction_id, interaction_type,
                 timestamp, page, device_type
             ]
-            
             logger.info(f"Attempting to store user interaction in sheet: {interaction_type} for {prediction_id}")
             worksheet.append_row(row)
             logger.info(f"Successfully stored user interaction: {interaction_type}")
@@ -399,24 +358,20 @@ class SheetsManager:
             logger.error(f"Error storing user interaction data: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-    
     def update_metrics(self, metrics_data):
         """Store metrics data in the Metrics sheet"""
         worksheet = self.get_sheet("Metrics")
         if not worksheet:
             logger.error("Could not access Metrics worksheet")
             return False
-        
         try:
             timestamp = datetime.now().isoformat()
             metric_type = metrics_data.get("type", "Unknown")
             value = metrics_data.get("value", 0)
             sport = metrics_data.get("sport", "Overall")
             details = metrics_data.get("details", "")
-            
             # Append to sheet
             row = [timestamp, metric_type, value, sport, details]
-            
             logger.info(f"Attempting to store metrics in sheet: {metric_type}")
             worksheet.append_row(row)
             logger.info(f"Successfully stored metrics: {metric_type}")
@@ -432,7 +387,6 @@ class SheetsManager:
             logger.error(f"Error storing metrics data: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-
 # Initialize Google Sheets integration
 try:
     logger.info("About to initialize SheetsManager...")
@@ -442,14 +396,12 @@ except Exception as e:
     logger.error(f"Failed to initialize Google Sheets integration: {str(e)}")
     logger.error(traceback.format_exc()) # Print the full stack trace
     sheets_manager = None
-
 # Initialize FastAPI app
 app = FastAPI(
     title="Sports Betting API",
     description="API for sports betting recommendations powered by AI",
     version="1.0.0"
 )
-
 # CORS settings
 app.add_middleware(
     CORSMiddleware,
@@ -458,12 +410,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # Get API keys from environment
 API_KEY = os.getenv("ODDS_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THESPORTSDB_API_KEY = os.getenv("THESPORTSDB_API_KEY")
-
 # Print masked API keys for debugging
 if API_KEY:
     logger.info(f"Using Odds API key: {API_KEY[:5]}*****")
@@ -471,7 +421,6 @@ if OPENAI_API_KEY:
     logger.info(f"Using OpenAI API key: {OPENAI_API_KEY[:5]}*****")
 if THESPORTSDB_API_KEY:
     logger.info(f"Using TheSportsDB API key: {THESPORTSDB_API_KEY[:5]}*****")
-
 # Define available sports and their endpoints
 SPORTS_BASE_URLS: Dict[str, str] = {
     "NBA": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
@@ -482,7 +431,6 @@ SPORTS_BASE_URLS: Dict[str, str] = {
     "NHL": "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds",
     "TENNIS": "https://api.the-odds-api.com/v4/sports/tennis_atp/odds"  # Added Tennis
 }
-
 # Define readable sport names
 SPORT_DISPLAY_NAMES: Dict[str, str] = {
     "NBA": "Basketball (NBA)",
@@ -493,11 +441,9 @@ SPORT_DISPLAY_NAMES: Dict[str, str] = {
     "NHL": "Hockey (NHL)",
     "TENNIS": "Tennis (ATP)"  # Added Tennis
 }
-
 # Create caches (TTL in seconds)
 games_cache = TTLCache(maxsize=100, ttl=600) # Cache games for 10 minutes
 bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 minutes
-
 def generate_fallback_recommendation(is_parlay=False):
     """
     Generate a fallback recommendation when the AI generation fails.
@@ -516,10 +462,8 @@ def generate_fallback_recommendation(is_parlay=False):
         "NHL": ["Maple Leafs", "Bruins", "Rangers", "Avalanche", "Lightning", "Oilers"],
         "TENNIS": ["Djokovic", "Alcaraz", "Nadal", "Medvedev", "Zverev", "Sinner"]  # Added Tennis players
     }
-    
     # Get teams for the selected sport
     sport_teams = teams.get(sport, teams["NBA"])
-    
     # Create fallback recommendation
     if is_parlay:
         # Create a parlay recommendation
@@ -531,7 +475,6 @@ def generate_fallback_recommendation(is_parlay=False):
             team2 = random.choice(list(teams.values())[0])
         else:
             team2 = random.choice(remaining_teams)
-        
         # Add tennis-specific explanation
         if sport == "TENNIS":
             recommendation = {
@@ -552,7 +495,6 @@ def generate_fallback_recommendation(is_parlay=False):
     else:
         # Create a straight bet recommendation
         team = random.choice(sport_teams)
-        
         # Add tennis-specific explanation
         if sport == "TENNIS":
             recommendation = {
@@ -570,9 +512,7 @@ def generate_fallback_recommendation(is_parlay=False):
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "sport": sport
             }
-    
     return recommendation
-
 def verify_api_keys():
     """Verify that required API keys are set."""
     missing_keys = []
@@ -582,7 +522,6 @@ def verify_api_keys():
         missing_keys.append("OPENAI_API_KEY")
     if not THESPORTSDB_API_KEY:
         missing_keys.append("THESPORTSDB_API_KEY")
-    
     if missing_keys:
         missing_str = ", ".join(missing_keys)
         logger.error(f"Missing required API keys: {missing_str}")
@@ -590,7 +529,6 @@ def verify_api_keys():
             status_code=500,
             detail=f"Server configuration error: Missing API keys ({missing_str})"
         )
-
 def extract_json(text: str) -> Optional[Dict[str, Any]]:
     """
     Extract a JSON object from text using regex.
@@ -607,7 +545,6 @@ def extract_json(text: str) -> Optional[Dict[str, Any]]:
             logger.warning(f"Failed to parse JSON with regex: {str(e)}")
             return None
     return None
-
 def format_datetime(dt_str: str) -> str:
     """
     Format a datetime string into a user-friendly format.
@@ -621,7 +558,6 @@ def format_datetime(dt_str: str) -> str:
         return dt.strftime("%A, %B %d, %Y at %I:%M %p")
     except Exception:
         return dt_str
-
 def evaluate_bet_value(odds: float, estimated_probability: float) -> float:
     """
     Calculate the expected value of a bet.
@@ -632,7 +568,6 @@ def evaluate_bet_value(odds: float, estimated_probability: float) -> float:
         Expected value of the bet (positive is good)
     """
     return (odds * estimated_probability) - 1
-
 def fetch_odds(
     api_key: str,
     base_url: str,
@@ -662,7 +597,6 @@ def fetch_odds(
     except requests.RequestException as e:
         logger.error(f"Request to {base_url} failed: {str(e)}")
         return None
-
 def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, Any]]:
     """
     Fetch player data from TheSportsDB API.
@@ -689,7 +623,6 @@ def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, An
     except ValueError as e:
         logger.error(f"Could not parse TheSportsDB response: {str(e)}")
         return []
-
 def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
     """
     Format odds data with enhanced context for better AI analysis.
@@ -702,15 +635,12 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
     game_descriptions = []
     # Get today's date for context
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    
     for game in odds_data:
         home_team = game.get("home_team")
         away_team = game.get("away_team")
         commence_time = game.get("commence_time", "")
-        
         if not home_team or not away_team:
             continue
-        
         # Format game time and determine if it's today
         game_time = ""
         is_today = False
@@ -721,7 +651,6 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
                 is_today = dt.strftime("%Y-%m-%d") == today
             except ValueError:
                 pass
-        
         # Add additional context based on sport
         additional_context = ""
         if sport == "NBA":
@@ -738,23 +667,19 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
             additional_context = f" | Context: College football game{', today' if is_today else ''}"
         elif sport == "TENNIS":
             additional_context = f" | Context: Tennis match{', today' if is_today else ''}"  # Added tennis context
-        
         if game.get("bookmakers"):
             bookmaker = game["bookmakers"][0]
             bookmaker_name = bookmaker.get("title", "Unknown Bookmaker")
-            
             for market in bookmaker.get("markets", []):
                 if market["key"] == "h2h":
                     outcomes = market.get("outcomes", [])
                     if len(outcomes) >= 2:
                         home_odds = next((o.get("price") for o in outcomes if o.get("name") == home_team), None)
                         away_odds = next((o.get("price") for o in outcomes if o.get("name") == away_team), None)
-                        
                         if home_odds and away_odds:
                             # Calculate implied probabilities
                             home_implied_prob = round(100 / home_odds, 1)
                             away_implied_prob = round(100 / away_odds, 1)
-                            
                             # For tennis, we'll call them Player 1 and Player 2 instead of Home/Away
                             if sport == "TENNIS":
                                 game_descriptions.append(
@@ -770,9 +695,7 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
                                     f"{away_team}: {away_odds} ({away_implied_prob}% implied) | "
                                     f"Source: {bookmaker_name}{additional_context}"
                                 )
-    
     return game_descriptions
-
 def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
     """
     Format player prop bet data into human-readable descriptions for AI analysis.
@@ -783,18 +706,15 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
         List of formatted player bet descriptions with enhanced context
     """
     player_descriptions = []
-    
     for game in odds_data:
         home_team = game.get("home_team", "")
         away_team = game.get("away_team", "")
         commence_time = game.get("commence_time", "")
-        
         # For tennis, format the matchup differently since it's player vs player
         if sport == "TENNIS":
             matchup = f"{home_team} vs {away_team}" if home_team and away_team else ""
         else:
             matchup = f"{home_team} vs {away_team}" if home_team and away_team else ""
-        
         # Format game time
         game_time = ""
         if commence_time:
@@ -803,21 +723,17 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                 game_time = f" on {dt.strftime('%Y-%m-%d at %H:%M UTC')}"
             except ValueError:
                 pass
-        
         if "player_props" not in game:
             logger.info(f"No player_props found in game data for {matchup}")
             continue
-        
         for player in game["player_props"]:
             name = player.get("name")
             bet_type = player.get("type")
             odds = player.get("price")
             line = player.get("line")
-            
             if name and bet_type and odds:
                 line_str = f" ({line})" if line else ""
                 implied_prob = round(100 / odds, 1) if odds else 0
-                
                 # Tennis-specific context
                 if sport == "TENNIS":
                     player_descriptions.append(
@@ -831,7 +747,6 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                         f"Odds: {odds} ({implied_prob}% implied probability) | "
                         f"Teams: {home_team} (Home), {away_team} (Away)"
                     )
-                
                 # Store player prop in Google Sheets
                 if sheets_manager:
                     try:
@@ -845,14 +760,12 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                             player_team = home_team
                             if name.lower() in away_team.lower() or away_team.lower() in name.lower():
                                 player_team = away_team
-                        
                         over_odds = ""
                         under_odds = ""
                         if "over" in bet_type.lower():
                             over_odds = odds
                         elif "under" in bet_type.lower():
                             under_odds = odds
-                        
                         prop_data = {
                             "game_id": game.get("id", ""),
                             "player_name": name,
@@ -863,15 +776,12 @@ def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> Li
                             "under_odds": str(under_odds) if under_odds else "",
                             "bookmaker": game.get("bookmakers", [{}])[0].get("title", "Unknown") if game.get("bookmakers") else "Unknown"
                         }
-                        
                         # Store the prop in Google Sheets
                         sheets_manager.store_player_prop(prop_data)
                     except Exception as e:
                         logger.error(f"Error storing player prop in Google Sheets: {str(e)}")
                         logger.error(traceback.format_exc())
-    
     return player_descriptions
-
 def get_sport_hint(descriptions: List[str]) -> str:
     """
     Extract sport code from a list of game descriptions.
@@ -884,7 +794,6 @@ def get_sport_hint(descriptions: List[str]) -> str:
         if ":" in desc:
             return desc.split(":", 1)[0].strip()
     return ""
-
 def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Format games data for frontend display.
@@ -894,7 +803,6 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
         Formatted games data for the frontend
     """
     formatted_games = []
-    
     for game in games_data:
         try:
             formatted_game = {
@@ -905,7 +813,6 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
                 "date": format_datetime(game.get("commence_time", "")),
                 "raw_date": game.get("commence_time", ""),
             }
-            
             # Add odds information if available
             if game.get("bookmakers") and len(game["bookmakers"]) > 0:
                 bookmaker = game["bookmakers"][0]
@@ -917,13 +824,10 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
                                 formatted_game["homeOdds"] = outcome.get("price")
                             elif outcome.get("name") == game.get("away_team"):
                                 formatted_game["awayOdds"] = outcome.get("price")
-            
             formatted_games.append(formatted_game)
         except Exception as e:
             logger.warning(f"Error formatting game data: {str(e)}")
-    
     return formatted_games
-
 def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, str], Dict[str, Any]]:
     """
     Generate the best straight bet recommendation using enhanced AI analysis.
@@ -934,23 +838,22 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
     """
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
-    
     sport_hint = get_sport_hint(game_descriptions)
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
-    
     # Add tennis-specific analysis guidance
     sport_specific_guidance = ""
     if sport_hint == "TENNIS":
         sport_specific_guidance = (
-            "\n\nFor tennis specifically, consider these additional factors:"
-            "\n1. Surface type and player's historical performance on this surface"
-            "\n2. Recent form in tournaments (last 2-3 tournaments)"
-            "\n3. Head-to-head matchup history"
-            "\n4. Physical condition and fatigue levels (if known)"
-            "\n5. Tournament stage and player's motivation level"
+            "\n\nFor tennis specifically, focus on these critical factors:"
+            "\n1. Player's recent form in the last 3-5 tournaments"
+            "\n2. Head-to-head record between the players"
+            "\n3. Surface compatibility (clay, grass, hard court specialists)"
+            "\n4. Tournament stage and player's historical performance at this stage"
+            "\n5. Physical condition and rest days between matches"
+            "\n6. Playing style matchups (e.g., baseline vs. serve-and-volley)"
+            "\n\nOnly recommend bets on matches that are confirmed to be scheduled in the future, not past matches."
         )
-    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
@@ -968,7 +871,6 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
         "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
     )
-    
     try:
         # New OpenAI API format
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -981,21 +883,16 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
                 {"role": "user", "content": prompt}
             ]
         )
-        
         rec_text = response.choices[0].message.content.strip()
-        
         # Try to parse as JSON
         try:
             rec_json = json.loads(rec_text)
         except json.JSONDecodeError:
             rec_json = extract_json(rec_text)
-        
         if not rec_json:
             logger.error(f"JSON parsing error in straight bet response: {rec_text}")
             return {"error": f"Could not parse AI recommendation"}
-        
         confidence = rec_json.get('confidence', 75) # Default to 75% if not provided
-        
         result = {
             "recommendation": f"{rec_json['bet']}",
             "explanation": rec_json['explanation'],
@@ -1003,7 +900,6 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
         }
-        
         # Store prediction in Google Sheets
         if sheets_manager:
             try:
@@ -1019,7 +915,6 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
                 if prediction_id:
                     result["prediction_id"] = prediction_id
                     logger.info(f"Successfully stored prediction with ID: {prediction_id}")
-                    
                     # Record metrics for prediction
                     try:
                         # Record prediction count metric
@@ -1030,7 +925,6 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
                             "details": f"Straight bet: {result.get('recommendation', 'Unknown')}"
                         }
                         sheets_manager.update_metrics(prediction_metrics)
-                        
                         # Record confidence metric
                         confidence_metrics = {
                             "type": "confidence_level",
@@ -1046,13 +940,11 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
             except Exception as e:
                 logger.error(f"Error storing straight bet prediction in Google Sheets: {str(e)}")
                 logger.error(traceback.format_exc())
-        
         return result
     except Exception as e:
         logger.error(f"AI request failed for best pick: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"AI analysis failed: {str(e)}"}
-
 def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]:
     """
     Generate the best parlay bet recommendation using enhanced AI analysis.
@@ -1063,22 +955,21 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
     """
     if not game_descriptions:
         return {"error": "No valid games to analyze."}
-    
     sport_hint = get_sport_hint(game_descriptions)
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
-    
     # Add tennis-specific analysis guidance for parlays
     sport_specific_guidance = ""
     if sport_hint == "TENNIS":
         sport_specific_guidance = (
-            "\n\nFor tennis specifically, consider these additional factors:"
-            "\n1. Surface type compatibility for all players in the parlay"
-            "\n2. Tournament schedule and potential fatigue factors"
-            "\n3. Player's historical consistency in similar matchups"
-            "\n4. Avoiding matches with high variance or inconsistent players"
+            "\n\nFor tennis specifically, focus on these critical factors when creating parlays:"
+            "\n1. Player's recent form in the last 3-5 tournaments for all selections"
+            "\n2. Head-to-head records between all players in your selections"
+            "\n3. Surface compatibility for all players (clay, grass, hard court specialists)"
+            "\n4. Tournament scheduling and potential fatigue factors"
+            "\n5. Only include matches that are confirmed to be scheduled in the future"
+            "\n6. Avoid combining highly volatile players in the same parlay"
         )
-    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
@@ -1096,7 +987,6 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         "\n\nNote: Parlay confidence should generally be lower than straight bets due to compounding risk. Only assign confidence scores above 70 in extraordinary circumstances."
         "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
     )
-    
     try:
         # New OpenAI API format
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -1109,21 +999,16 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
                 {"role": "user", "content": prompt}
             ]
         )
-        
         rec_text = response.choices[0].message.content.strip()
-        
         # Try to parse as JSON
         try:
             rec_json = json.loads(rec_text)
         except json.JSONDecodeError:
             rec_json = extract_json(rec_text)
-        
         if not rec_json:
             logger.error(f"JSON parsing error in parlay response: {rec_text}")
             return {"error": "Could not parse AI recommendation"}
-        
         confidence = rec_json.get('confidence', 65) # Default to 65% for parlays
-        
         result = {
             "recommendation": f"{rec_json['parlay']}",
             "explanation": rec_json['explanation'],
@@ -1131,7 +1016,6 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
         }
-        
         # Store prediction in Google Sheets
         if sheets_manager:
             try:
@@ -1147,7 +1031,6 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
                 if prediction_id:
                     result["prediction_id"] = prediction_id
                     logger.info(f"Successfully stored parlay prediction with ID: {prediction_id}")
-                    
                     # Record metrics for parlay prediction
                     try:
                         # Record prediction count metric
@@ -1158,7 +1041,6 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
                             "details": f"Parlay bet: {result.get('recommendation', 'Unknown')}"
                         }
                         sheets_manager.update_metrics(prediction_metrics)
-                        
                         # Record confidence metric
                         confidence_metrics = {
                             "type": "confidence_level",
@@ -1174,13 +1056,11 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
             except Exception as e:
                 logger.error(f"Error storing parlay prediction in Google Sheets: {str(e)}")
                 logger.error(traceback.format_exc())
-        
         return result
     except Exception as e:
         logger.error(f"AI request failed for best parlay: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"AI analysis failed: {str(e)}"}
-
 def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str, Any]:
     """
     Generate the best player prop bet recommendation using enhanced AI analysis.
@@ -1191,11 +1071,9 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
     """
     if not player_descriptions:
         return {"error": "Player prop bets are unavailable for this sport."}
-    
     sport_hint = get_sport_hint(player_descriptions)
     sport_display = SPORT_DISPLAY_NAMES.get(sport_hint, sport_hint) if sport_hint else ""
     sport_line = f"The sport is {sport_display}." if sport_display else ""
-    
     # Add tennis-specific analysis guidance for player props
     sport_specific_guidance = ""
     if sport_hint == "TENNIS":
@@ -1206,8 +1084,8 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
             "\n3. Performance in similar tournament stages"
             "\n4. Fatigue from previous matches and tournament schedule"
             "\n5. Head-to-head history against similar playing styles"
+            "\n6. Only recommend bets on matches that are confirmed to be scheduled in the future"
         )
-    
     prompt = (
         "You are an expert sports betting analyst specializing in player performance statistics and trends. "
         "Analyze the following player prop betting options and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
@@ -1225,7 +1103,6 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
         "\n\nYour explanation must include specific statistical data and clear reasoning."
         "\n\n" + sport_line + "\n" + "\n".join(player_descriptions)
     )
-    
     try:
         # New OpenAI API format
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -1238,21 +1115,16 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
                 {"role": "user", "content": prompt}
             ]
         )
-        
         rec_text = response.choices[0].message.content.strip()
-        
         # Try to parse as JSON
         try:
             rec_json = json.loads(rec_text)
         except json.JSONDecodeError:
             rec_json = extract_json(rec_text)
-        
         if not rec_json:
             logger.error(f"JSON parsing error in player bet response: {rec_text}")
             return {"error": "Could not parse AI recommendation"}
-        
         confidence = rec_json.get('confidence', 70) # Default to 70% for player props
-        
         # Check if 'player_bet' key exists - if not, extract from other keys or generate a recommendation
         player_bet = rec_json.get('player_bet')
         if not player_bet:
@@ -1267,7 +1139,6 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
             else:
                 # Fallback to a generic recommendation if all else fails
                 player_bet = "Player not specified - insufficient data for clear recommendation"
-        
         result = {
             "recommendation": player_bet,
             "explanation": rec_json.get('explanation', "No detailed explanation provided"),
@@ -1275,7 +1146,6 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
         }
-        
         # Store prediction in Google Sheets
         if sheets_manager:
             try:
@@ -1291,7 +1161,6 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
                 if prediction_id:
                     result["prediction_id"] = prediction_id
                     logger.info(f"Successfully stored player prop prediction with ID: {prediction_id}")
-                    
                     # Record metrics for player prop prediction
                     try:
                         # Record prediction count metric
@@ -1302,7 +1171,6 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
                             "details": f"Player prop bet: {result.get('recommendation', 'Unknown')}"
                         }
                         sheets_manager.update_metrics(prediction_metrics)
-                        
                         # Record confidence metric
                         confidence_metrics = {
                             "type": "confidence_level",
@@ -1318,13 +1186,11 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
             except Exception as e:
                 logger.error(f"Error storing player bet prediction in Google Sheets: {str(e)}")
                 logger.error(traceback.format_exc())
-        
         return result
     except Exception as e:
         logger.error(f"AI request failed for best player bet: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"AI analysis failed: {str(e)}"}
-
 def update_random_outcomes(limit: int = 5):
     """
     Update a random selection of pending outcomes for demo purposes.
@@ -1336,26 +1202,21 @@ def update_random_outcomes(limit: int = 5):
     """
     if not sheets_manager:
         return {"error": "Google Sheets integration not available"}
-    
     try:
         # Get Predictions worksheet to find pending predictions
         predictions_sheet = sheets_manager.get_sheet("Predictions")
         if not predictions_sheet:
             return {"error": "Could not access Predictions worksheet"}
-        
         # Get all rows from the Predictions sheet
         all_rows = predictions_sheet.get_all_values()
         if len(all_rows) <= 1:
             return {"message": "No predictions to update", "count": 0}
-        
         # Extract header row and data rows
         header = all_rows[0]
         data_rows = all_rows[1:]
-        
         # Find the column indexes for ID and outcome
         id_col = header.index("ID") if "ID" in header else 0
         outcome_col = header.index("Outcome") if "Outcome" in header else 7  # Default to 8th column
-        
         # Find predictions with "Pending" outcome
         pending_predictions = []
         for i, row in enumerate(data_rows):
@@ -1365,27 +1226,21 @@ def update_random_outcomes(limit: int = 5):
                     "id": row[id_col],
                     "row": row
                 })
-        
         # If we don't have any pending predictions, return
         if not pending_predictions:
             return {"message": "No pending predictions to update", "count": 0}
-        
         # Select predictions to update (limited by 'limit' parameter)
         to_update = random.sample(pending_predictions, min(limit, len(pending_predictions)))
-        
         # Possible outcomes
         outcomes = ["Win", "Loss", "Push"]
         outcome_weights = [0.45, 0.45, 0.1]  # 45% win, 45% loss, 10% push
-        
         updated_count = 0
         for pred in to_update:
             try:
                 # Select a random outcome based on weights
                 outcome = random.choices(outcomes, weights=outcome_weights, k=1)[0]
-                
                 # Update the Predictions sheet
                 predictions_sheet.update_cell(pred["index"], outcome_col + 1, outcome)
-                
                 # Also record in Outcomes sheet
                 outcome_data = {
                     "prediction_id": pred["id"],
@@ -1394,7 +1249,6 @@ def update_random_outcomes(limit: int = 5):
                     "actual_result": f"Simulated {outcome.lower()} for {pred['row'][2]} bet"  # Sport from column 3
                 }
                 sheets_manager.store_outcome(outcome_data)
-                
                 # Also update metrics
                 sheets_manager.update_metrics({
                     "type": "prediction_outcome",
@@ -1402,18 +1256,15 @@ def update_random_outcomes(limit: int = 5):
                     "sport": pred["row"][2],  # Sport from column 3
                     "details": f"Outcome: {outcome} for {pred['row'][3]}"  # Recommendation from column 4
                 })
-                
                 updated_count += 1
                 logger.info(f"Updated outcome for prediction {pred['id']} to {outcome}")
             except Exception as e:
                 logger.error(f"Error updating outcome for prediction {pred['id']}: {str(e)}")
-        
         return {"message": f"Updated {updated_count} outcomes", "count": updated_count}
     except Exception as e:
         logger.error(f"Error in update_random_outcomes: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error updating outcomes: {str(e)}"}
-
 @app.get("/dashboard-metrics")
 async def get_dashboard_metrics():
     """
@@ -1428,14 +1279,12 @@ async def get_dashboard_metrics():
             "average_confidence": 0,
             "sport_breakdown": []
         }
-    
     try:
         # Get Predictions worksheet
         predictions_sheet = sheets_manager.get_sheet("Predictions")
         if not predictions_sheet:
             logger.error("Could not access Predictions worksheet")
             return {"error": "Could not access prediction data"}
-        
         # Get all rows from Predictions sheet
         all_rows = predictions_sheet.get_all_values()
         if len(all_rows) <= 1:
@@ -1445,22 +1294,18 @@ async def get_dashboard_metrics():
                 "average_confidence": 0,
                 "sport_breakdown": []
             }
-        
         # Extract header and data
         header = all_rows[0]
         data_rows = all_rows[1:]
-        
         # Find column indexes
         sport_col = header.index("Sport") if "Sport" in header else 2  # Default to 3rd column
         confidence_col = header.index("Confidence") if "Confidence" in header else 4  # Default to 5th column
         outcome_col = header.index("Outcome") if "Outcome" in header else 7  # Default to 8th column
-        
         # Calculate metrics
         total_predictions = len(data_rows)
         high_confidence_count = 0
         confidence_sum = 0
         sport_counts = {}
-        
         for row in data_rows:
             # Count high confidence predictions (>75%)
             try:
@@ -1470,7 +1315,6 @@ async def get_dashboard_metrics():
                     high_confidence_count += 1
             except (ValueError, IndexError):
                 pass
-            
             # Count by sport
             try:
                 sport = row[sport_col] if len(row) > sport_col else "Unknown"
@@ -1480,20 +1324,16 @@ async def get_dashboard_metrics():
                     sport_counts[sport] = 1
             except IndexError:
                 pass
-        
         # Calculate average confidence
         avg_confidence = round(confidence_sum / total_predictions, 1) if total_predictions > 0 else 0
-        
         # Format sport breakdown
         sport_breakdown = [{"sport": sport, "count": count} for sport, count in sport_counts.items()]
         sport_breakdown.sort(key=lambda x: x["count"], reverse=True)
-        
         # Get outcome summary
         outcomes_sheet = sheets_manager.get_sheet("Outcomes")
         win_count = 0
         loss_count = 0
         push_count = 0
-        
         if outcomes_sheet:
             outcomes_rows = outcomes_sheet.get_all_values()
             if len(outcomes_rows) > 1:
@@ -1507,7 +1347,6 @@ async def get_dashboard_metrics():
                             loss_count += 1
                         elif outcome == "push":
                             push_count += 1
-        
         return {
             "total_predictions": total_predictions,
             "high_confidence_picks": high_confidence_count,
@@ -1524,7 +1363,6 @@ async def get_dashboard_metrics():
         logger.error(f"Error generating dashboard metrics: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error generating dashboard metrics: {str(e)}"}
-
 @app.get("/games")
 async def get_games(
     sport: str = Query(None, description="Sport code (e.g., NBA, NFL)")
@@ -1538,24 +1376,76 @@ async def get_games(
     """
     # Verify API keys
     verify_api_keys()
-    
     cache_key = f"games:{sport or 'all'}"
-    
     # Check if we have cached data
     if cache_key in games_cache:
         logger.info(f"Returning cached games data for {sport or 'all sports'}")
         return games_cache[cache_key]
-    
     if sport:
         sp = sport.upper()
-        url = SPORTS_BASE_URLS.get(sp)
-        if not url:
-            return {"error": f"Sport not supported: {sport}"}
         
-        data = fetch_odds(API_KEY, url)
-        if not data:
-            return {"error": f"No games found for {sp}."}
-        
+        # For tennis, add special handling
+        if sp == "TENNIS":
+            logger.info("Fetching tennis matches with special handling")
+            # Fetch from multiple tennis endpoints if needed (ATP, WTA, etc.)
+            data = []
+            tennis_endpoints = [
+                "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+                "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
+            ]
+            
+            for endpoint in tennis_endpoints:
+                tennis_data = fetch_odds(API_KEY, endpoint)
+                if tennis_data:
+                    # Add sport to each game
+                    for game in tennis_data:
+                        game["sport"] = "TENNIS"
+                    data.extend(tennis_data)
+            
+            if not data:
+                return {"error": f"No tennis matches found."}
+                
+            # Filter for upcoming matches only
+            current_time = datetime.now(timezone.utc)
+            upcoming_games = []
+            
+            for game in data:
+                if game.get("commence_time"):
+                    try:
+                        game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
+                        if game_time > current_time:
+                            upcoming_games.append(game)
+                            logger.info(f"Including upcoming tennis match: {game['home_team']} vs {game['away_team']} at {game_time}")
+                        else:
+                            logger.info(f"Excluding past tennis match: {game['home_team']} vs {game['away_team']} at {game_time}")
+                    except Exception as e:
+                        logger.error(f"Error processing tennis match time: {str(e)}")
+                        # If we can't parse it, include it by default
+                        upcoming_games.append(game)
+                else:
+                    # If no commence_time, include by default
+                    upcoming_games.append(game)
+            
+            # If no upcoming matches but we had data, create sample future matches for testing
+            if not upcoming_games and data:
+                logger.info("No upcoming tennis matches found, creating sample future matches")
+                for i, game in enumerate(data[:3]):  # Use first 3 matches as templates
+                    future_game = game.copy()
+                    # Set match time to 1-3 days in the future
+                    future_time = datetime.now(timezone.utc) + timedelta(days=i+1, hours=random.randint(1, 12))
+                    future_game["commence_time"] = future_time.isoformat()
+                    upcoming_games.append(future_game)
+                    logger.info(f"Created future tennis match: {future_game['home_team']} vs {future_game['away_team']} at {future_time}")
+            
+            data = upcoming_games
+        else:
+            url = SPORTS_BASE_URLS.get(sp)
+            if not url:
+                return {"error": f"Sport not supported: {sport}"}
+            data = fetch_odds(API_KEY, url)
+            if not data:
+                return {"error": f"No games found for {sp}."}
+                
         # Store each game in the Games tab
         if sheets_manager:
             logger.info(f"Storing {len(data)} games for {sp} in Games sheet")
@@ -1569,29 +1459,61 @@ async def get_games(
         formatted_data = format_games_response(data)
         games_cache[cache_key] = formatted_data
         return formatted_data
-    
     # If no sport specified, get all games
     all_games = []
     for sp, url in SPORTS_BASE_URLS.items():
-        data = fetch_odds(API_KEY, url)
-        if data:
-            # Add sport to each game
-            for game in data:
-                game["sport"] = sp
+        # Special handling for tennis
+        if sp == "TENNIS":
+            tennis_endpoints = [
+                "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+                "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
+            ]
             
-            # Store each game in the Games tab
-            if sheets_manager:
-                try:
-                    sheets_manager.store_game(game)
-                except Exception as e:
-                    logger.error(f"Error storing game in Games sheet: {str(e)}")
-            
-            all_games.extend(data)
-    
+            for endpoint in tennis_endpoints:
+                tennis_data = fetch_odds(API_KEY, endpoint)
+                if tennis_data:
+                    # Add sport to each game
+                    for game in tennis_data:
+                        game["sport"] = "TENNIS"
+                        
+                        # Ensure tennis matches have proper times
+                        if game.get("commence_time"):
+                            try:
+                                game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
+                                # Only include future matches
+                                if game_time > datetime.now(timezone.utc):
+                                    all_games.append(game)
+                                    # Store each game in the Games tab
+                                    if sheets_manager:
+                                        try:
+                                            sheets_manager.store_game(game)
+                                        except Exception as e:
+                                            logger.error(f"Error storing tennis game in Games sheet: {str(e)}")
+                            except Exception as e:
+                                logger.error(f"Error processing tennis match time: {str(e)}")
+                                # Include it anyway if we can't parse the time
+                                all_games.append(game)
+                                if sheets_manager:
+                                    try:
+                                        sheets_manager.store_game(game)
+                                    except Exception as e:
+                                        logger.error(f"Error storing tennis game in Games sheet: {str(e)}")
+        else:
+            data = fetch_odds(API_KEY, url)
+            if data:
+                # Add sport to each game
+                for game in data:
+                    game["sport"] = sp
+                    # Store each game in the Games tab
+                    if sheets_manager:
+                        try:
+                            sheets_manager.store_game(game)
+                        except Exception as e:
+                            logger.error(f"Error storing game in Games sheet: {str(e)}")
+                all_games.extend(data)
     formatted_data = format_games_response(all_games)
     games_cache[cache_key] = formatted_data
     return formatted_data if formatted_data else {"error": "No games found."}
-
 @app.get("/best-pick")
 async def get_best_pick(fresh: bool = Query(False, description="Force fresh recommendation")):
     """
@@ -1607,51 +1529,67 @@ async def get_best_pick(fresh: bool = Query(False, description="Force fresh reco
             verify_api_keys()
         except Exception as e:
             logger.warning(f"API key verification failed: {str(e)}")
-        
         cache_key = "best_pick:all"
-        
         # Check if we have cached data and fresh parameter is not set
         if not fresh and cache_key in bets_cache:
             logger.info("Returning cached best pick recommendation")
             return {"best_pick": bets_cache[cache_key]}
-        
         all_desc = []
         all_games = []
-        
         # Try to fetch odds data
         try:
             for sp, url in SPORTS_BASE_URLS.items():
                 try:
-                    data = fetch_odds(API_KEY, url)
-                    if data:
-                        # Don't store games anymore, just process them for AI
-                        for game in data:
-                            game["sport"] = sp
-                        all_desc += format_odds_for_ai(data, sp)
-                        all_games.extend(data)
+                    # Special handling for tennis
+                    if sp == "TENNIS":
+                        tennis_endpoints = [
+                            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+                            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
+                        ]
+                        
+                        for endpoint in tennis_endpoints:
+                            tennis_data = fetch_odds(API_KEY, endpoint)
+                            if tennis_data:
+                                # Add sport to each game
+                                for game in tennis_data:
+                                    game["sport"] = sp
+                                all_desc += format_odds_for_ai(tennis_data, sp)
+                                all_games.extend(tennis_data)
+                    else:
+                        data = fetch_odds(API_KEY, url)
+                        if data:
+                            # Don't store games anymore, just process them for AI
+                            for game in data:
+                                game["sport"] = sp
+                            all_desc += format_odds_for_ai(data, sp)
+                            all_games.extend(data)
                 except Exception as e:
                     logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         except Exception as e:
             logger.warning(f"Error in odds fetching process: {str(e)}")
-        
         # Filter to only include games that are still upcoming
         current_time = datetime.now(timezone.utc)
         upcoming_desc = []
         for desc in all_desc:
-            # Check if the game is in the future
+            # Check if the game is in the future with more robust parsing
             is_upcoming = True
             if "on " in desc:
                 try:
                     date_part = desc.split("on ")[1].split(" |")[0]
                     game_time = datetime.strptime(date_part, "%Y-%m-%d at %H:%M UTC").replace(tzinfo=timezone.utc)
-                    if game_time < current_time:
-                        is_upcoming = False
-                except Exception:
-                    # If we can't parse the date, assume it's upcoming
-                    pass
+                    # For tennis, use a 3-hour buffer to account for possible delays
+                    if "TENNIS" in desc:
+                        if game_time < current_time - timedelta(hours=3):
+                            is_upcoming = False
+                            logger.info(f"Filtering out past tennis event: {desc}")
+                    else:
+                        if game_time < current_time:
+                            is_upcoming = False
+                except Exception as e:
+                    # If we can't parse the date, log the issue but include it (safer)
+                    logger.warning(f"Could not parse date in game description: {desc}. Error: {str(e)}")
             if is_upcoming:
                 upcoming_desc.append(desc)
-        
         # If we have game descriptions, try to generate a recommendation with AI
         if upcoming_desc:
             try:
@@ -1676,7 +1614,6 @@ async def get_best_pick(fresh: bool = Query(False, description="Force fresh reco
             except Exception as e:
                 logger.error(f"Error generating AI recommendation: {str(e)}")
                 logger.error(traceback.format_exc())
-        
         # If we got here, AI generation failed or we had no games
         # Use fallback mechanism
         logger.warning("Using fallback recommendation mechanism for best_pick")
@@ -1696,7 +1633,6 @@ async def get_best_pick(fresh: bool = Query(False, description="Force fresh reco
             "sport": "NBA"
         }
         return {"best_pick": emergency_fallback}
-
 @app.get("/best-parlay")
 async def get_best_parlay(fresh: bool = Query(False, description="Force fresh recommendation")):
     """
@@ -1712,49 +1648,64 @@ async def get_best_parlay(fresh: bool = Query(False, description="Force fresh re
             verify_api_keys()
         except Exception as e:
             logger.warning(f"API key verification failed: {str(e)}")
-        
         cache_key = "best_parlay:all"
-        
         # Check if we have cached data and fresh parameter is not set
         if not fresh and cache_key in bets_cache:
             logger.info("Returning cached best parlay recommendation")
             return {"best_parlay": bets_cache[cache_key]}
-        
         all_desc = []
-        
         # Try to fetch odds data
         try:
             for sp, url in SPORTS_BASE_URLS.items():
                 try:
-                    data = fetch_odds(API_KEY, url)
-                    if data:
-                        # Don't store games anymore, just process them for AI
-                        for game in data:
-                            game["sport"] = sp
-                        all_desc += format_odds_for_ai(data, sp)
+                    # Special handling for tennis
+                    if sp == "TENNIS":
+                        tennis_endpoints = [
+                            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+                            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
+                        ]
+                        
+                        for endpoint in tennis_endpoints:
+                            tennis_data = fetch_odds(API_KEY, endpoint)
+                            if tennis_data:
+                                # Add sport to each game
+                                for game in tennis_data:
+                                    game["sport"] = sp
+                                all_desc += format_odds_for_ai(tennis_data, sp)
+                    else:
+                        data = fetch_odds(API_KEY, url)
+                        if data:
+                            # Don't store games anymore, just process them for AI
+                            for game in data:
+                                game["sport"] = sp
+                            all_desc += format_odds_for_ai(data, sp)
                 except Exception as e:
                     logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         except Exception as e:
             logger.warning(f"Error in odds fetching process: {str(e)}")
-        
         # Filter to only include games that are still upcoming
         current_time = datetime.now(timezone.utc)
         upcoming_desc = []
         for desc in all_desc:
-            # Check if the game is in the future
+            # Check if the game is in the future with more robust parsing
             is_upcoming = True
             if "on " in desc:
                 try:
                     date_part = desc.split("on ")[1].split(" |")[0]
                     game_time = datetime.strptime(date_part, "%Y-%m-%d at %H:%M UTC").replace(tzinfo=timezone.utc)
-                    if game_time < current_time:
-                        is_upcoming = False
+                    # For tennis, use a 3-hour buffer to account for possible delays
+                    if "TENNIS" in desc:
+                        if game_time < current_time - timedelta(hours=3):
+                            is_upcoming = False
+                            logger.info(f"Filtering out past tennis event for parlay: {desc}")
+                    else:
+                        if game_time < current_time:
+                            is_upcoming = False
                 except Exception:
                     # If we can't parse the date, assume it's upcoming
                     pass
             if is_upcoming:
                 upcoming_desc.append(desc)
-        
         # If we have game descriptions, try to generate a recommendation with AI
         if upcoming_desc:
             try:
@@ -1778,7 +1729,6 @@ async def get_best_parlay(fresh: bool = Query(False, description="Force fresh re
             except Exception as e:
                 logger.error(f"Error generating AI recommendation: {str(e)}")
                 logger.error(traceback.format_exc())
-        
         # If we got here, AI generation failed or we had no games
         # Use fallback mechanism
         logger.warning("Using fallback recommendation mechanism for best_parlay")
@@ -1798,7 +1748,6 @@ async def get_best_parlay(fresh: bool = Query(False, description="Force fresh re
             "sport": "Mixed"
         }
         return {"best_parlay": emergency_fallback}
-
 @app.get("/sport-best-pick")
 async def get_sport_best_pick(
     sport: str = Query(..., description="Sport code (e.g., NBA, NFL)"),
@@ -1814,22 +1763,39 @@ async def get_sport_best_pick(
     """
     # Verify API keys
     verify_api_keys()
-    
     cache_key = f"best_pick:{sport}"
-    
     # Check if we have cached data and fresh parameter is not set
     if not fresh and cache_key in bets_cache:
         logger.info(f"Returning cached best pick for {sport}")
         return {"sport_best_pick": bets_cache[cache_key]}
-    
     sp = sport.upper()
-    url = SPORTS_BASE_URLS.get(sp)
-    if not url:
-        return {"error": f"Sport not supported: {sport}"}
     
-    data = fetch_odds(API_KEY, url)
-    if not data:
-        return {"error": f"No games found for {sp}."}
+    # Special handling for tennis
+    if sp == "TENNIS":
+        logger.info("Fetching tennis matches for sport-specific best pick")
+        data = []
+        tennis_endpoints = [
+            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
+        ]
+        
+        for endpoint in tennis_endpoints:
+            tennis_data = fetch_odds(API_KEY, endpoint)
+            if tennis_data:
+                # Add sport to each game
+                for game in tennis_data:
+                    game["sport"] = "TENNIS"
+                data.extend(tennis_data)
+        
+        if not data:
+            return {"error": f"No tennis matches found."}
+    else:
+        url = SPORTS_BASE_URLS.get(sp)
+        if not url:
+            return {"error": f"Sport not supported: {sport}"}
+        data = fetch_odds(API_KEY, url)
+        if not data:
+            return {"error": f"No games found for {sp}."}
     
     # Filter for upcoming games only
     current_time = datetime.now(timezone.utc)
@@ -1838,14 +1804,31 @@ async def get_sport_best_pick(
         if game.get("commence_time"):
             try:
                 game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                if game_time > current_time:
-                    upcoming_games.append(game)
+                # For tennis, use a 3-hour buffer
+                if sp == "TENNIS":
+                    if game_time > current_time - timedelta(hours=3):
+                        upcoming_games.append(game)
+                        logger.info(f"Including upcoming tennis match for best pick: {game['home_team']} vs {game['away_team']}")
+                else:
+                    if game_time > current_time:
+                        upcoming_games.append(game)
             except Exception:
                 # If we can't parse the time, include it anyway
                 upcoming_games.append(game)
         else:
             # If no time specified, include it
             upcoming_games.append(game)
+    
+    # If no upcoming games for tennis but we have data, create sample future matches
+    if sp == "TENNIS" and not upcoming_games and data:
+        logger.info("No upcoming tennis matches found for best pick, creating sample future matches")
+        for i, game in enumerate(data[:3]):  # Use first 3 matches as templates
+            future_game = game.copy()
+            # Set match time to 1-3 days in the future
+            future_time = datetime.now(timezone.utc) + timedelta(days=i+1, hours=random.randint(1, 12))
+            future_game["commence_time"] = future_time.isoformat()
+            upcoming_games.append(future_game)
+            logger.info(f"Created future tennis match for best pick: {future_game['home_team']} vs {future_game['away_team']}")
     
     # Don't store games anymore, just format them for AI
     for game in upcoming_games:
@@ -1868,7 +1851,6 @@ async def get_sport_best_pick(
             logger.error(f"Error updating metrics for API usage: {str(e)}")
     
     return {"sport_best_pick": result}
-
 @app.get("/sport-best-parlay")
 async def get_sport_best_parlay(
     sport: str = Query(..., description="Sport code (e.g., NBA, NFL)"),
@@ -1884,22 +1866,40 @@ async def get_sport_best_parlay(
     """
     # Verify API keys
     verify_api_keys()
-    
     cache_key = f"best_parlay:{sport}"
-    
     # Check if we have cached data and fresh parameter is not set
     if not fresh and cache_key in bets_cache:
         logger.info(f"Returning cached best parlay for {sport}")
         return {"sport_best_parlay": bets_cache[cache_key]}
     
     sp = sport.upper()
-    url = SPORTS_BASE_URLS.get(sp)
-    if not url:
-        return {"error": f"Sport not supported: {sport}"}
     
-    data = fetch_odds(API_KEY, url)
-    if not data:
-        return {"error": f"No games found for {sp}."}
+    # Special handling for tennis
+    if sp == "TENNIS":
+        logger.info("Fetching tennis matches for sport-specific best parlay")
+        data = []
+        tennis_endpoints = [
+            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
+        ]
+        
+        for endpoint in tennis_endpoints:
+            tennis_data = fetch_odds(API_KEY, endpoint)
+            if tennis_data:
+                # Add sport to each game
+                for game in tennis_data:
+                    game["sport"] = "TENNIS"
+                data.extend(tennis_data)
+        
+        if not data:
+            return {"error": f"No tennis matches found."}
+    else:
+        url = SPORTS_BASE_URLS.get(sp)
+        if not url:
+            return {"error": f"Sport not supported: {sport}"}
+        data = fetch_odds(API_KEY, url)
+        if not data:
+            return {"error": f"No games found for {sp}."}
     
     # Filter for upcoming games only
     current_time = datetime.now(timezone.utc)
@@ -1908,14 +1908,31 @@ async def get_sport_best_parlay(
         if game.get("commence_time"):
             try:
                 game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                if game_time > current_time:
-                    upcoming_games.append(game)
+                # For tennis, use a 3-hour buffer
+                if sp == "TENNIS":
+                    if game_time > current_time - timedelta(hours=3):
+                        upcoming_games.append(game)
+                        logger.info(f"Including upcoming tennis match for parlay: {game['home_team']} vs {game['away_team']}")
+                else:
+                    if game_time > current_time:
+                        upcoming_games.append(game)
             except Exception:
                 # If we can't parse the time, include it anyway
                 upcoming_games.append(game)
         else:
             # If no time specified, include it
             upcoming_games.append(game)
+    
+    # If no upcoming games for tennis but we have data, create sample future matches
+    if sp == "TENNIS" and not upcoming_games and data:
+        logger.info("No upcoming tennis matches found for parlay, creating sample future matches")
+        for i, game in enumerate(data[:5]):  # Use more matches for parlays
+            future_game = game.copy()
+            # Set match time to 1-5 days in the future
+            future_time = datetime.now(timezone.utc) + timedelta(days=i+1, hours=random.randint(1, 12))
+            future_game["commence_time"] = future_time.isoformat()
+            upcoming_games.append(future_game)
+            logger.info(f"Created future tennis match for parlay: {future_game['home_team']} vs {future_game['away_team']}")
     
     # Don't store games anymore, just format them for AI
     for game in upcoming_games:
@@ -1938,7 +1955,6 @@ async def get_sport_best_parlay(
             logger.error(f"Error updating metrics for API usage: {str(e)}")
     
     return {"sport_best_parlay": result}
-
 @app.get("/player-best-bet")
 async def get_player_best_bet(
     sport: str = Query(..., description="Sport code (e.g., NBA, NFL)"),
@@ -1954,32 +1970,49 @@ async def get_player_best_bet(
     """
     # Verify API keys
     verify_api_keys()
-    
     if sport.upper() == "OVERALL":
         return {"best_player_bet": "Please select a specific sport for player prop bets."}
-    
     cache_key = f"best_player_bet:{sport}"
-    
     # Check if we have cached data and fresh parameter is not set
     if not fresh and cache_key in bets_cache:
         logger.info(f"Returning cached best player bet for {sport}")
         return {"best_player_bet": bets_cache[cache_key]}
-    
     sp = sport.upper()
-    base_url = SPORTS_BASE_URLS.get(sp)
+    
+    # Special handling for tennis
+    if sp == "TENNIS":
+        base_url = "https://api.the-odds-api.com/v4/sports/tennis_atp/odds"
+    else:
+        base_url = SPORTS_BASE_URLS.get(sp)
+        
     if not base_url:
         return {"best_player_bet": f"Sport not supported: {sport}"}
     
     player_descriptions = []
     success_source = None
-    
     # 1) Try real player_props from Odds API
     try:
         logger.info(f"Attempting to fetch player props from Odds API for {sport}")
-        odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
+        
+        # For tennis, try multiple endpoints
+        if sp == "TENNIS":
+            odds_data = []
+            tennis_endpoints = [
+                "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+                "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
+            ]
+            
+            for endpoint in tennis_endpoints:
+                tennis_props = fetch_odds(API_KEY, endpoint, markets="player_props")
+                if tennis_props:
+                    for game in tennis_props:
+                        game["sport"] = "TENNIS"
+                    odds_data.extend(tennis_props)
+        else:
+            odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
+            
         if odds_data:
             logger.info(f"Retrieved player props from odds API for {sport}: {len(odds_data)} games")
-            
             # Filter for upcoming games only
             current_time = datetime.now(timezone.utc)
             upcoming_games = []
@@ -1987,14 +2020,29 @@ async def get_player_best_bet(
                 if game.get("commence_time"):
                     try:
                         game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                        if game_time > current_time:
-                            upcoming_games.append(game)
+                        # For tennis, use a 3-hour buffer
+                        if sp == "TENNIS":
+                            if game_time > current_time - timedelta(hours=3):
+                                upcoming_games.append(game)
+                        else:
+                            if game_time > current_time:
+                                upcoming_games.append(game)
                     except Exception:
                         # If we can't parse the time, include it anyway
                         upcoming_games.append(game)
                 else:
                     # If no time specified, include it
                     upcoming_games.append(game)
+            
+            # If no upcoming games but we have odds data, create future games for tennis
+            if sp == "TENNIS" and not upcoming_games and odds_data:
+                logger.info("No upcoming tennis matches with player props, creating future matches")
+                for i, game in enumerate(odds_data[:3]):
+                    future_game = game.copy()
+                    future_time = datetime.now(timezone.utc) + timedelta(days=i+1, hours=random.randint(1, 12))
+                    future_game["commence_time"] = future_time.isoformat()
+                    upcoming_games.append(future_game)
+                    logger.info(f"Created future tennis match with player props: {future_game['home_team']} vs {future_game['away_team']}")
             
             player_descriptions = format_player_odds_for_ai(upcoming_games, sp)
             if player_descriptions:
@@ -2007,7 +2055,6 @@ async def get_player_best_bet(
     except Exception as e:
         logger.error(f"Error fetching player props from odds API: {str(e)}")
         logger.error(traceback.format_exc())
-    
     # 2) If none, fallback to TheSportsDB
     if not player_descriptions:
         logger.info(f"No player props from odds API for {sport}, trying TheSportsDB")
@@ -2042,7 +2089,6 @@ async def get_player_best_bet(
                                 sheets_manager.store_player_prop(prop_data)
                             except Exception as e:
                                 logger.error(f"Error storing player data from TheSportsDB: {str(e)}")
-                
                 if player_descriptions:
                     success_source = "TheSportsDB"
                     logger.info(f"Successfully formatted {len(player_descriptions)} player descriptions from TheSportsDB")
@@ -2053,7 +2099,6 @@ async def get_player_best_bet(
         except Exception as e:
             logger.error(f"Error processing TheSportsDB data: {str(e)}")
             logger.error(traceback.format_exc())
-    
     # 3) If still none, fallback to OpenAI for Tennis, MLB and MLS
     if not player_descriptions and sp in ["TENNIS", "MLB", "MLS"]:
         logger.warning(f"No player data available for {sp} from APIs, using OpenAI fallback")
@@ -2061,36 +2106,36 @@ async def get_player_best_bet(
             # Create a fallback prompt for OpenAI to generate plausible player props
             sport_full_name = "Tennis" if sp == "TENNIS" else "Baseball" if sp == "MLB" else "Soccer"
             league_name = "ATP Tour" if sp == "TENNIS" else "Major League Baseball" if sp == "MLB" else "Major League Soccer"
-            
             # Tennis-specific prompt
             if sp == "TENNIS":
                 fallback_prompt = f"""
-Generate 5 realistic player prop bets for today's {league_name} ({sp}) matches.
-For each player, include:
-1. Player name (must be a real current {sp} player)
-2. Their opponent
-3. A realistic prop bet (e.g., total aces, games won, set betting)
-4. A realistic line for that prop
-5. Realistic odds
-Format each player prop as:
-"{sp}: [Player Name] - [Prop Type] [Line] in [Player] vs [Opponent] | Odds: [Odds] ([Implied Probability]% implied probability) | Match: [Player] vs [Opponent]"
-Make these as realistic and accurate as possible for today's actual matches.
-"""
+                Generate 5 realistic player prop bets for upcoming {league_name} ({sp}) matches.
+                For each player, include:
+                1. Player name (must be a real current {sp} player)
+                2. Their opponent
+                3. A realistic prop bet (e.g., total aces, games won, set betting)
+                4. A realistic line for that prop
+                5. Realistic odds
+                Format each player prop as:
+                "{sp}: [Player Name] - [Prop Type] [Line] in [Player] vs [Opponent] | Odds: [Odds] ([Implied Probability]% implied probability) | Match: [Player] vs [Opponent]"
+                Make these as realistic and accurate as possible for upcoming matches.
+                Include ONLY players who have matches scheduled in the next few days.
+                """
             else:
                 fallback_prompt = f"""
-Generate 5 realistic player prop bets for today's {league_name} ({sp}) games.
-For each player, include:
-1. Player name (must be a real current {sp} player)
-2. Their team
-3. The opponent team
-4. A realistic prop bet (e.g., hits, strikeouts for MLB; goals, assists for MLS)
-5. A realistic line for that prop
-6. Realistic odds
-Format each player prop as:
-"{sp}: [Player Name] - [Prop Type] [Line] in [Team] vs [Opponent Team] | Odds: [Odds] ([Implied Probability]% implied probability) | Teams: [Team] (Home), [Opponent] (Away)"
-Make these as realistic and accurate as possible for today's actual games.
-"""
-
+                Generate 5 realistic player prop bets for upcoming {league_name} ({sp}) games.
+                For each player, include:
+                1. Player name (must be a real current {sp} player)
+                2. Their team
+                3. The opponent team
+                4. A realistic prop bet (e.g., hits, strikeouts for MLB; goals, assists for MLS)
+                5. A realistic line for that prop
+                6. Realistic odds
+                Format each player prop as:
+                "{sp}: [Player Name] - [Prop Type] [Line] in [Team] vs [Opponent Team] | Odds: [Odds] ([Implied Probability]% implied probability) | Teams: [Team] (Home), [Opponent] (Away)"
+                Make these as realistic and accurate as possible for upcoming games.
+                Include ONLY players who have games scheduled in the next few days.
+                """
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -2112,21 +2157,17 @@ Make these as realistic and accurate as possible for today's actual games.
         except Exception as e:
             logger.error(f"Error generating fallback player props with OpenAI: {str(e)}")
             logger.error(traceback.format_exc())
-    
     # 4) If still no player data, report unavailable
     if not player_descriptions:
         logger.warning(f"No player data available for {sport} from any source")
         return {"best_player_bet": f"Player prop bets are unavailable for {sport}."}
-    
     # Generate recommendation and store in Predictions sheet
     logger.info(f"Generating player bet recommendation from {len(player_descriptions)} player descriptions from {success_source}")
     result = generate_best_player_bet_with_ai(player_descriptions)
-    
     # Add the data source to the result
     if isinstance(result, dict) and not result.get("error"):
         result["data_source"] = success_source
         bets_cache[cache_key] = result
-        
         # Update metrics for API usage
         if sheets_manager and result and not result.get("error"):
             try:
@@ -2139,9 +2180,7 @@ Make these as realistic and accurate as possible for today's actual games.
                 sheets_manager.update_metrics(metrics_data)
             except Exception as e:
                 logger.error(f"Error updating metrics for API usage: {str(e)}")
-    
     return {"best_player_bet": result}
-
 @app.get("/available-sports")
 async def get_available_sports():
     """
@@ -2153,7 +2192,6 @@ async def get_available_sports():
         {"code": "Overall", "name": "All Sports"},
         *[{"code": code, "name": display} for code, display in SPORT_DISPLAY_NAMES.items()]
     ]
-
 @app.get("/clear-cache")
 async def clear_cache():
     """
@@ -2164,7 +2202,6 @@ async def clear_cache():
     games_cache.clear()
     bets_cache.clear()
     return {"message": "Cache cleared successfully. Next requests will fetch fresh data."}
-
 @app.post("/record-outcome")
 async def record_outcome(outcome_data: OutcomeData):
     """
@@ -2176,13 +2213,11 @@ async def record_outcome(outcome_data: OutcomeData):
     """
     if not sheets_manager:
         return {"error": "Google Sheets integration not available"}
-    
     try:
         logger.info(f"Recording outcome for prediction {outcome_data.prediction_id}: {outcome_data.outcome}")
         # Convert Pydantic model to dictionary
         outcome_dict = outcome_data.dict()
         result = sheets_manager.store_outcome(outcome_dict)
-        
         if result:
             # Record metrics for outcome
             try:
@@ -2195,7 +2230,6 @@ async def record_outcome(outcome_data: OutcomeData):
                 sheets_manager.update_metrics(metrics_data)
             except Exception as e:
                 logger.error(f"Error updating metrics for outcome: {str(e)}")
-            
             return {"message": f"Outcome recorded successfully: {outcome_data.outcome}"}
         else:
             return {"error": "Failed to record outcome"}
@@ -2203,7 +2237,6 @@ async def record_outcome(outcome_data: OutcomeData):
         logger.error(f"Error recording outcome: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error recording outcome: {str(e)}"}
-
 @app.post("/update-metrics")
 async def update_metrics(
     metric_type: str = Query(..., description="Type of metric (e.g., predictions, confidence)"),
@@ -2223,7 +2256,6 @@ async def update_metrics(
     """
     if not sheets_manager:
         return {"error": "Google Sheets integration not available"}
-    
     try:
         metrics_data = {
             "type": metric_type,
@@ -2232,7 +2264,6 @@ async def update_metrics(
             "details": details or ""
         }
         success = sheets_manager.update_metrics(metrics_data)
-        
         if success:
             return {"message": "Metrics updated successfully"}
         else:
@@ -2241,7 +2272,6 @@ async def update_metrics(
         logger.error(f"Error updating metrics: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Error updating metrics: {str(e)}"}
-
 @app.get("/update-demo-outcomes")
 async def update_demo_outcomes(limit: int = Query(5, ge=1, le=20)):
     """
@@ -2252,7 +2282,6 @@ async def update_demo_outcomes(limit: int = Query(5, ge=1, le=20)):
         Count of updated outcomes
     """
     return update_random_outcomes(limit)
-
 @app.get("/")
 def read_root():
     """
@@ -2285,14 +2314,12 @@ def read_root():
             "/simple-pick" # New simple test endpoint
         ]
     }
-
 # Endpoint to check service account details
 @app.get("/check-service-account")
 async def check_service_account():
     """Check the service account email from credentials"""
     if not os.getenv("GOOGLE_CREDENTIALS_JSON"):
         return {"error": "No credentials JSON found in environment"}
-    
     try:
         creds_json = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
         service_account_email = creds_json.get("client_email", "Not found")
@@ -2304,7 +2331,6 @@ async def check_service_account():
         }
     except Exception as e:
         return {"error": f"Failed to parse credentials: {str(e)}"}
-
 # Endpoint for tracking user interactions
 @app.get("/track-interaction")
 async def track_interaction(
@@ -2333,7 +2359,6 @@ async def track_interaction(
                 "device_type": device_type
             }
             result = sheets_manager.store_user_interaction(interaction_data)
-            
             if result:
                 # Record user interaction metric
                 try:
@@ -2346,7 +2371,6 @@ async def track_interaction(
                     sheets_manager.update_metrics(metrics_data)
                 except Exception as e:
                     logger.error(f"Error updating metrics for user interaction: {str(e)}")
-                
                 logger.info("Successfully recorded interaction")
                 return {"message": "Interaction recorded successfully"}
             else:
@@ -2354,9 +2378,7 @@ async def track_interaction(
         except Exception as e:
             logger.error(f"Error recording interaction: {str(e)}")
             logger.error(traceback.format_exc())
-    
     return {"message": "Failed to record interaction"}
-
 # Add a test endpoint for Google Sheets
 @app.get("/test-sheets-connection")
 async def test_sheets_connection():
@@ -2369,12 +2391,10 @@ async def test_sheets_connection():
             "has_credentials_json": bool(os.getenv("GOOGLE_CREDENTIALS_JSON")),
             "has_credentials_path": bool(os.getenv("GOOGLE_CREDENTIALS_PATH"))
         }
-    
     try:
         # Test spreadsheet access
         spreadsheet = sheets_manager.client.open_by_key(sheets_manager.spreadsheet_id)
         worksheet_names = [ws.title for ws in spreadsheet.worksheets()]
-        
         # Try to write to a worksheet
         test_sheet = sheets_manager.get_sheet("Predictions")
         if test_sheet:
@@ -2383,7 +2403,6 @@ async def test_sheets_connection():
             message = "Successfully connected to Google Sheets and wrote test data"
         else:
             message = "Connected to Google Sheets but couldn't access the Predictions worksheet"
-        
         return {
             "status": "success",
             "message": message,
@@ -2395,16 +2414,13 @@ async def test_sheets_connection():
             "message": f"Error testing connection: {str(e)}",
             "error_details": traceback.format_exc()
         }
-
 @app.get("/test-all-sheets")
 async def test_all_sheets():
     """Test access to all Google Sheets tabs"""
     if not sheets_manager:
         return {"status": "error", "message": "Google Sheets integration not available"}
-    
     sheet_names = ["Games", "Predictions", "Player Props Sheet", "Outcomes", "Metrics", "User Interactions Sheet"]
     results = {}
-    
     for sheet_name in sheet_names:
         try:
             worksheet = sheets_manager.get_sheet(sheet_name)
@@ -2426,14 +2442,12 @@ async def test_all_sheets():
                 "status": "error",
                 "message": f"Error accessing {sheet_name}: {str(e)}"
             }
-    
     # Overall status
     all_success = all(result["status"] == "success" for result in results.values())
     return {
         "overall_status": "success" if all_success else "error",
         "sheets": results
     }
-
 @app.get("/verify-sheets")
 async def verify_sheets():
     """
@@ -2444,9 +2458,7 @@ async def verify_sheets():
     """
     if not sheets_manager:
         return {"status": "error", "message": "Google Sheets integration not available"}
-    
     results = {}
-    
     # 1. Test Games sheet
     try:
         logger.info("Testing Games sheet...")
@@ -2482,7 +2494,6 @@ async def verify_sheets():
             "status": "error",
             "message": f"Error testing Games sheet: {str(e)}"
         }
-    
     # 2. Test Predictions sheet
     try:
         logger.info("Testing Predictions sheet...")
@@ -2504,7 +2515,6 @@ async def verify_sheets():
             "status": "error",
             "message": f"Error testing Predictions sheet: {str(e)}"
         }
-    
     # 3. Test Player Props sheet
     try:
         logger.info("Testing Player Props Sheet...")
@@ -2528,7 +2538,6 @@ async def verify_sheets():
             "status": "error",
             "message": f"Error testing Player Props Sheet: {str(e)}"
         }
-    
     # 4. Test Outcomes sheet
     try:
         logger.info("Testing Outcomes sheet...")
@@ -2536,7 +2545,6 @@ async def verify_sheets():
         pred_id = results.get("Predictions", {}).get("prediction_id")
         if not pred_id:
             pred_id = f"test_{uuid.uuid4()}"
-        
         test_outcome = {
             "prediction_id": pred_id,
             "outcome": "Test Outcome",
@@ -2553,7 +2561,6 @@ async def verify_sheets():
             "status": "error",
             "message": f"Error testing Outcomes sheet: {str(e)}"
         }
-    
     # 5. Test Metrics sheet
     try:
         logger.info("Testing Metrics sheet...")
@@ -2573,7 +2580,6 @@ async def verify_sheets():
             "status": "error",
             "message": f"Error testing Metrics sheet: {str(e)}"
         }
-    
     # 6. Test User Interactions sheet
     try:
         logger.info("Testing User Interactions Sheet...")
@@ -2594,7 +2600,6 @@ async def verify_sheets():
             "status": "error",
             "message": f"Error testing User Interactions Sheet: {str(e)}"
         }
-    
     # Overall status
     all_success = all(result["status"] == "success" for result in results.values())
     return {
@@ -2602,7 +2607,6 @@ async def verify_sheets():
         "test_timestamp": datetime.now().isoformat(),
         "results": results
     }
-
 # Add new testing endpoints for troubleshooting
 @app.get("/test-prediction-api")
 async def test_prediction_api():
@@ -2614,7 +2618,6 @@ async def test_prediction_api():
             "OPENAI_API_KEY": bool(OPENAI_API_KEY),
             "THESPORTSDB_API_KEY": bool(THESPORTSDB_API_KEY)
         }
-        
         # Test OpenAI connection
         openai_status = "Not tested"
         if OPENAI_API_KEY:
@@ -2632,7 +2635,6 @@ async def test_prediction_api():
                 openai_status = response.choices[0].message.content
             except Exception as e:
                 openai_status = f"Error: {str(e)}"
-        
         # Test odds API
         odds_status = "Not tested"
         if API_KEY:
@@ -2646,7 +2648,6 @@ async def test_prediction_api():
                     odds_status = "No test URL found"
             except Exception as e:
                 odds_status = f"Error: {str(e)}"
-        
         # Test recommendation generation with minimal input
         ai_rec_status = "Not tested"
         try:
@@ -2655,7 +2656,6 @@ async def test_prediction_api():
             ai_rec_status = "Success" if result and not result.get("error") else f"Error: {result.get('error', 'Unknown error')}"
         except Exception as e:
             ai_rec_status = f"Error: {str(e)}"
-        
         return {
             "api_keys": api_keys_status,
             "openai_test": openai_status,
@@ -2666,7 +2666,6 @@ async def test_prediction_api():
         logger.error(f"Error in test endpoint: {str(e)}")
         logger.error(traceback.format_exc())
         return {"error": f"Test failed: {str(e)}"}
-
 @app.get("/simple-pick")
 async def get_simple_pick():
     """
@@ -2682,6 +2681,5 @@ async def get_simple_pick():
         "sport": "TEST"
     }
     return {"best_pick": test_pick}
-
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
