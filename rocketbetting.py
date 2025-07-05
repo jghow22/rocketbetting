@@ -498,8 +498,16 @@ SPORTS_BASE_URLS: Dict[str, str] = {
     "MLS": "https://api.the-odds-api.com/v4/sports/soccer_usa_mls/odds",
     "MLB": "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds",
     "NHL": "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds",
-    "TENNIS": "https://api.the-odds-api.com/v4/sports/tennis_atp/odds"  # Added Tennis
+    "TENNIS": "https://api.the-odds-api.com/v4/sports/tennis_atp/odds"  # Primary tennis endpoint
 }
+
+# Define tennis-specific endpoints for comprehensive coverage
+TENNIS_ENDPOINTS = [
+    "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
+    "https://api.the-odds-api.com/v4/sports/tennis_wta/odds",
+    "https://api.the-odds-api.com/v4/sports/tennis_atp_singles/odds",
+    "https://api.the-odds-api.com/v4/sports/tennis_wta_singles/odds"
+]
 
 # Define readable sport names
 SPORT_DISPLAY_NAMES: Dict[str, str] = {
@@ -835,6 +843,42 @@ def fetch_odds(
     except requests.RequestException as e:
         logger.error(f"Request to {base_url} failed: {str(e)}")
         return None
+
+def fetch_tennis_odds(api_key: str, markets: str = "h2h", regions: str = "us") -> List[Dict[str, Any]]:
+    """
+    Fetch tennis odds data from multiple tennis endpoints.
+    Args:
+        api_key: The Odds API key
+        markets: Market types to fetch (e.g., h2h, player_props)
+        regions: Region code for odds format
+    Returns:
+        List of tennis match data from all available endpoints
+    """
+    all_tennis_data = []
+    
+    for endpoint in TENNIS_ENDPOINTS:
+        try:
+            logger.info(f"Fetching tennis data from: {endpoint}")
+            tennis_data = fetch_odds(api_key, endpoint, markets, regions)
+            if tennis_data:
+                # Add sport identifier to each game
+                for game in tennis_data:
+                    game["sport"] = "TENNIS"
+                    # Ensure we have proper team names for tennis
+                    if not game.get("home_team") and game.get("sport_key") == "tennis_atp":
+                        game["home_team"] = game.get("home_team", "Player 1")
+                    if not game.get("away_team") and game.get("sport_key") == "tennis_atp":
+                        game["away_team"] = game.get("away_team", "Player 2")
+                all_tennis_data.extend(tennis_data)
+                logger.info(f"Successfully fetched {len(tennis_data)} tennis matches from {endpoint}")
+            else:
+                logger.warning(f"No data returned from {endpoint}")
+        except Exception as e:
+            logger.error(f"Error fetching from {endpoint}: {str(e)}")
+            continue
+    
+    logger.info(f"Total tennis matches fetched: {len(all_tennis_data)}")
+    return all_tennis_data
 
 def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, Any]]:
     """
@@ -1738,23 +1782,11 @@ async def get_games(
         
         # For tennis, add special handling
         if sp == "TENNIS":
-            logger.info("Fetching tennis matches with special handling")
-            # Fetch from multiple tennis endpoints if needed (ATP, WTA, etc.)
-            data = []
-            tennis_endpoints = [
-                "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
-                "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
-            ]
+            logger.info("Fetching tennis matches with comprehensive data sources")
+            # Use the new tennis fetching function
+            data = fetch_tennis_odds(API_KEY)
             
-            for endpoint in tennis_endpoints:
-                tennis_data = fetch_odds(API_KEY, endpoint)
-                if tennis_data:
-                    # Add sport to each game
-                    for game in tennis_data:
-                        game["sport"] = "TENNIS"
-                    data.extend(tennis_data)
-            
-            # Filter for upcoming matches only
+            # Filter for upcoming matches only - but be more lenient for tennis
             current_time = datetime.now(timezone.utc)
             upcoming_games = []
             
@@ -1762,85 +1794,30 @@ async def get_games(
                 if game.get("commence_time"):
                     try:
                         game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                        # Only include future tennis matches
-                        if game_time > current_time:
+                        # For tennis, include matches that are within the next 30 days
+                        # This is more lenient than other sports to account for tournament schedules
+                        if game_time > current_time and game_time < current_time + timedelta(days=30):
                             upcoming_games.append(game)
-                            logger.info(f"Including upcoming tennis match: {game['home_team']} vs {game['away_team']}")
+                            logger.info(f"Including upcoming tennis match: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                         else:
-                            logger.info(f"Excluding past tennis match: {game['home_team']} vs {game['away_team']}")
+                            logger.info(f"Excluding tennis match outside window: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                     except Exception as e:
                         logger.error(f"Error parsing tennis match time: {str(e)}")
-                        # For tennis, be strict and exclude if we can't verify the time
-                        continue
-            
-            # If no upcoming real matches, use OpenAI to generate data
-            if not upcoming_games:
-                logger.info("No real tennis matches found, generating with OpenAI")
-                tennis_predictions = generate_tennis_predictions_with_openai("straight", 5)
-                
-                # Transform these predictions into game data format
-                if tennis_predictions:
-                    for i, prediction in enumerate(tennis_predictions):
-                        # Extract player names
-                        match = re.search(r'TENNIS: (.*?) vs (.*?) on', prediction)
-                        if match:
-                            player1 = match.group(1).strip()
-                            player2 = match.group(2).strip()
-                            
-                            # Extract date
-                            date_match = re.search(r'on (\d{4}-\d{2}-\d{2})', prediction)
-                            date_str = date_match.group(1) if date_match else None
-                            
-                            # If we have date, create a datetime
-                            future_time = None
-                            if date_str:
-                                try:
-                                    future_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                                    future_time = datetime.combine(future_date, datetime.min.time())
-                                    future_time = future_time.replace(tzinfo=timezone.utc) + timedelta(hours=12)  # Noon UTC
-                                except Exception:
-                                    # Use a future date if parsing fails
-                                    future_time = datetime.now(timezone.utc) + timedelta(days=i + 1, hours=12)
-                            else:
-                                # Use a future date if no date in the string
-                                future_time = datetime.now(timezone.utc) + timedelta(days=i + 1, hours=12)
-                            
-                            # Extract odds if possible
-                            odds1 = 2.0
-                            odds2 = 2.0
-                            odds_match = re.search(r'Odds: .*?: (\d+\.\d+).*?, .*?: (\d+\.\d+)', prediction)
-                            if odds_match:
-                                try:
-                                    odds1 = float(odds_match.group(1))
-                                    odds2 = float(odds_match.group(2))
-                                except ValueError:
-                                    pass
-                            
-                            # Create a game data structure
-                            game_data = {
-                                "id": f"openai_tennis_{uuid.uuid4()}",
-                                "sport": "TENNIS",
-                                "home_team": player1,
-                                "away_team": player2,
-                                "commence_time": future_time.isoformat(),
-                                "bookmakers": [
-                                    {
-                                        "title": "Generated Odds",
-                                        "markets": [
-                                            {
-                                                "key": "h2h",
-                                                "outcomes": [
-                                                    {"name": player1, "price": odds1},
-                                                    {"name": player2, "price": odds2}
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                            upcoming_games.append(game_data)
+                        # For tennis, include matches even if we can't parse the time
+                        # This is more lenient than other sports
+                        upcoming_games.append(game)
+                else:
+                    # If no commence_time, include the match anyway for tennis
+                    # This handles cases where the API doesn't provide exact times
+                    upcoming_games.append(game)
+                    logger.info(f"Including tennis match without time: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
             
             data = upcoming_games
+            
+            # If we still have no data, return an error instead of using OpenAI
+            if not data:
+                logger.warning("No tennis matches found from any source")
+                return {"error": "No tennis matches available at this time. Please try again later."}
         else:
             url = SPORTS_BASE_URLS.get(sp)
             if not url:
@@ -1870,21 +1847,10 @@ async def get_games(
     for sp, url in SPORTS_BASE_URLS.items():
         # Special handling for tennis
         if sp == "TENNIS":
-            tennis_endpoints = [
-                "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
-                "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
-            ]
-            tennis_data = []
+            logger.info("Fetching tennis matches for all sports view")
+            tennis_data = fetch_tennis_odds(API_KEY)
             
-            for endpoint in tennis_endpoints:
-                endpoint_data = fetch_odds(API_KEY, endpoint)
-                if endpoint_data:
-                    # Add sport to each game
-                    for game in endpoint_data:
-                        game["sport"] = "TENNIS"
-                    tennis_data.extend(endpoint_data)
-            
-            # Filter for upcoming tennis matches only
+            # Filter for upcoming tennis matches only - more lenient for all sports view
             current_time = datetime.now(timezone.utc)
             upcoming_tennis = []
             
@@ -1892,8 +1858,8 @@ async def get_games(
                 if game.get("commence_time"):
                     try:
                         game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                        # Only include future tennis matches
-                        if game_time > current_time:
+                        # Include matches within the next 30 days
+                        if game_time > current_time and game_time < current_time + timedelta(days=30):
                             upcoming_tennis.append(game)
                             # Store each game in the Games tab
                             if sheets_manager:
@@ -1903,81 +1869,21 @@ async def get_games(
                                     logger.error(f"Error storing tennis game in Games sheet: {str(e)}")
                     except Exception as e:
                         logger.error(f"Error parsing tennis match time: {str(e)}")
-                        # Exclude if we can't verify the time for tennis
-            
-            # If no upcoming real matches, use OpenAI to generate data
-            if not upcoming_tennis:
-                logger.info("No real tennis matches found for all sports view, generating with OpenAI")
-                tennis_predictions = generate_tennis_predictions_with_openai("straight", 5)
-                
-                # Transform these predictions into game data format
-                if tennis_predictions:
-                    for i, prediction in enumerate(tennis_predictions):
-                        # Extract player names
-                        match = re.search(r'TENNIS: (.*?) vs (.*?) on', prediction)
-                        if match:
-                            player1 = match.group(1).strip()
-                            player2 = match.group(2).strip()
-                            
-                            # Extract date
-                            date_match = re.search(r'on (\d{4}-\d{2}-\d{2})', prediction)
-                            date_str = date_match.group(1) if date_match else None
-                            
-                            # If we have date, create a datetime
-                            future_time = None
-                            if date_str:
-                                try:
-                                    future_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                                    future_time = datetime.combine(future_date, datetime.min.time())
-                                    future_time = future_time.replace(tzinfo=timezone.utc) + timedelta(hours=12)  # Noon UTC
-                                except Exception:
-                                    # Use a future date if parsing fails
-                                    future_time = datetime.now(timezone.utc) + timedelta(days=i + 1, hours=12)
-                            else:
-                                # Use a future date if no date in the string
-                                future_time = datetime.now(timezone.utc) + timedelta(days=i + 1, hours=12)
-                            
-                            # Extract odds if possible
-                            odds1 = 2.0
-                            odds2 = 2.0
-                            odds_match = re.search(r'Odds: .*?: (\d+\.\d+).*?, .*?: (\d+\.\d+)', prediction)
-                            if odds_match:
-                                try:
-                                    odds1 = float(odds_match.group(1))
-                                    odds2 = float(odds_match.group(2))
-                                except ValueError:
-                                    pass
-                            
-                            # Create a game data structure
-                            game_data = {
-                                "id": f"openai_tennis_{uuid.uuid4()}",
-                                "sport": "TENNIS",
-                                "home_team": player1,
-                                "away_team": player2,
-                                "commence_time": future_time.isoformat(),
-                                "bookmakers": [
-                                    {
-                                        "title": "Generated Odds",
-                                        "markets": [
-                                            {
-                                                "key": "h2h",
-                                                "outcomes": [
-                                                    {"name": player1, "price": odds1},
-                                                    {"name": player2, "price": odds2}
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                            upcoming_tennis.append(game_data)
-                            
-                            # Store in Games sheet
-                            if sheets_manager:
-                                try:
-                                    sheets_manager.store_game(game_data)
-                                except Exception as e:
-                                    logger.error(f"Error storing generated tennis game in Games sheet: {str(e)}")
+                        # Include matches even if we can't parse the time
+                        upcoming_tennis.append(game)
+                        if sheets_manager:
+                            try:
+                                sheets_manager.store_game(game)
+                            except Exception as e:
+                                logger.error(f"Error storing tennis game in Games sheet: {str(e)}")
+                else:
+                    # Include matches without time information
+                    upcoming_tennis.append(game)
+                    if sheets_manager:
+                        try:
+                            sheets_manager.store_game(game)
+                        except Exception as e:
+                            logger.error(f"Error storing tennis game in Games sheet: {str(e)}")
             
             all_games.extend(upcoming_tennis)
         else:
@@ -2037,21 +1943,10 @@ async def get_best_pick(
                 try:
                     # Special handling for tennis
                     if sp == "TENNIS":
-                        tennis_endpoints = [
-                            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
-                            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
-                        ]
-                        tennis_data = []
+                        logger.info("Fetching tennis matches for best pick analysis")
+                        tennis_data = fetch_tennis_odds(API_KEY)
                         
-                        for endpoint in tennis_endpoints:
-                            endpoint_data = fetch_odds(API_KEY, endpoint)
-                            if endpoint_data:
-                                # Add sport to each game
-                                for game in endpoint_data:
-                                    game["sport"] = sp
-                                tennis_data.extend(endpoint_data)
-                        
-                        # Filter for upcoming tennis matches only
+                        # Filter for upcoming tennis matches only - more lenient for analysis
                         current_time = datetime.now(timezone.utc)
                         upcoming_tennis = []
                         
@@ -2059,26 +1954,26 @@ async def get_best_pick(
                             if game.get("commence_time"):
                                 try:
                                     game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                                    # Only include future tennis matches
-                                    if game_time > current_time:
+                                    # Include matches within the next 30 days
+                                    if game_time > current_time and game_time < current_time + timedelta(days=30):
                                         upcoming_tennis.append(game)
-                                        logger.info(f"Including upcoming tennis match for best pick: {game['home_team']} vs {game['away_team']}")
+                                        logger.info(f"Including upcoming tennis match for best pick: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                                     else:
-                                        logger.info(f"Excluding past tennis match for best pick: {game['home_team']} vs {game['away_team']}")
+                                        logger.info(f"Excluding tennis match outside window for best pick: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                                 except Exception as e:
                                     logger.error(f"Error parsing tennis match time: {str(e)}")
-                                    # Exclude if we can't verify the time for tennis
+                                    # Include matches even if we can't parse the time
+                                    upcoming_tennis.append(game)
+                            else:
+                                # Include matches without time information
+                                upcoming_tennis.append(game)
                         
-                        # If no upcoming real matches, use OpenAI to generate data
-                        if not upcoming_tennis:
-                            logger.info("No real tennis matches found for best pick, generating with OpenAI")
-                            tennis_predictions = generate_tennis_predictions_with_openai("straight", 5)
-                            if tennis_predictions:
-                                all_desc += tennis_predictions
-                                logger.info(f"Added {len(tennis_predictions)} OpenAI tennis predictions for best pick")
-                        else:
+                        if upcoming_tennis:
                             all_desc += format_odds_for_ai(upcoming_tennis, sp)
                             all_games.extend(upcoming_tennis)
+                            logger.info(f"Added {len(upcoming_tennis)} tennis matches for best pick analysis")
+                        else:
+                            logger.warning("No tennis matches found for best pick analysis")
                     else:
                         data = fetch_odds(API_KEY, url)
                         if data:
@@ -2164,102 +2059,15 @@ async def get_best_pick(
                 logger.error(f"Error generating AI recommendation: {str(e)}")
                 logger.error(traceback.format_exc())
         
-        # Check if we specifically requested tennis and need to ensure a current tennis recommendation
-        tennis_requested = sport.lower() == "tennis" if sport else False
-        
-        # If we got here, AI generation failed or we had no games - generate directly with OpenAI
-        logger.warning("Using direct OpenAI recommendation for best_pick")
-        
-        # For tennis requests, ensure we're using tennis-specific generation
-        if tennis_requested:
-            direct_recommendation = generate_tennis_recommendation_with_openai("straight")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("bet", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 75),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS"
-                }
-                bets_cache[cache_key] = result
-                return {"best_pick": result}
-        else:
-            # Generic recommendation
-            client = openai.OpenAI(api_key=OPENAI_API_KEY)
-            prompt = """
-            Generate a high-quality sports betting recommendation for an upcoming game.
-            This must be for a game that will happen in the next few days, NOT a past game.
-            
-            Your recommendation should:
-            1. Include a real team/player that has an upcoming game
-            2. Explicitly reference that this is for an upcoming future game (not a past game)
-            3. Include a specific future date
-            4. Provide detailed statistical analysis and reasoning
-            
-            Return ONLY a valid JSON object with this exact format:
-            {
-                "sport": "[Sport Name]",
-                "bet": "[Team/Player Name]",
-                "explanation": "[Detailed reasoning with specific data points and explicit mention this is for a future game]",
-                "confidence": [value between 65-85]
-            }
-            """
-            
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    temperature=0.7,
-                    max_tokens=500,
-                    messages=[
-                        {"role": "system", "content": "You are an expert sports betting analyst who knows all current teams, players, and games."},
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                
-                recommendation_text = response.choices[0].message.content.strip()
-                
-                # Try to parse the JSON
-                try:
-                    recommendation = json.loads(recommendation_text)
-                except json.JSONDecodeError:
-                    # If that fails, try to extract JSON with regex
-                    recommendation = extract_json(recommendation_text)
-                    if not recommendation:
-                        logger.error(f"Failed to parse OpenAI response as JSON: {recommendation_text}")
-                        return {"error": "Failed to generate recommendation"}
-                
-                result = {
-                    "recommendation": recommendation.get("bet", ""),
-                    "explanation": recommendation.get("explanation", ""),
-                    "confidence": recommendation.get("confidence", 75),
-                    "last_updated": datetime.now(timezone.utc).isoformat(),
-                    "sport": recommendation.get("sport", "Unknown")
-                }
-                
-                bets_cache[cache_key] = result
-                return {"best_pick": result}
-            except Exception as e:
-                logger.error(f"Error generating direct recommendation with OpenAI: {str(e)}")
-                return {"error": f"Failed to generate recommendation: {str(e)}"}
+        # If we got here, AI generation failed or we had no games
+        logger.warning("No valid games found for analysis")
+        return {"error": "No games available for analysis at this time. Please try again later."}
     except Exception as e:
         # Catch-all exception handler to ensure we always return something
         logger.error(f"Unhandled error in get_best_pick: {str(e)}")
         logger.error(traceback.format_exc())
         
-        # Emergency fallback - generate with OpenAI
-        try:
-            direct_recommendation = generate_tennis_recommendation_with_openai("straight")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("bet", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 75),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": direct_recommendation.get("sport", "Unknown")
-                }
-                return {"best_pick": result}
-        except:
-            return {"error": f"Failed to generate recommendation: {str(e)}"}
+        return {"error": f"Failed to generate recommendation: {str(e)}"}
 
 @app.get("/best-parlay")
 async def get_best_parlay(
@@ -2296,21 +2104,10 @@ async def get_best_parlay(
                 try:
                     # Special handling for tennis
                     if sp == "TENNIS":
-                        tennis_endpoints = [
-                            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
-                            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
-                        ]
-                        tennis_data = []
+                        logger.info("Fetching tennis matches for best parlay analysis")
+                        tennis_data = fetch_tennis_odds(API_KEY)
                         
-                        for endpoint in tennis_endpoints:
-                            endpoint_data = fetch_odds(API_KEY, endpoint)
-                            if endpoint_data:
-                                # Add sport to each game
-                                for game in endpoint_data:
-                                    game["sport"] = sp
-                                tennis_data.extend(endpoint_data)
-                        
-                        # Filter for upcoming tennis matches only
+                        # Filter for upcoming tennis matches only - more lenient for analysis
                         current_time = datetime.now(timezone.utc)
                         upcoming_tennis = []
                         
@@ -2318,25 +2115,25 @@ async def get_best_parlay(
                             if game.get("commence_time"):
                                 try:
                                     game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                                    # Only include future tennis matches
-                                    if game_time > current_time:
+                                    # Include matches within the next 30 days
+                                    if game_time > current_time and game_time < current_time + timedelta(days=30):
                                         upcoming_tennis.append(game)
-                                        logger.info(f"Including upcoming tennis match for best parlay: {game['home_team']} vs {game['away_team']}")
+                                        logger.info(f"Including upcoming tennis match for best parlay: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                                     else:
-                                        logger.info(f"Excluding past tennis match for best parlay: {game['home_team']} vs {game['away_team']}")
+                                        logger.info(f"Excluding tennis match outside window for best parlay: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                                 except Exception as e:
                                     logger.error(f"Error parsing tennis match time: {str(e)}")
-                                    # Exclude if we can't verify the time for tennis
+                                    # Include matches even if we can't parse the time
+                                    upcoming_tennis.append(game)
+                            else:
+                                # Include matches without time information
+                                upcoming_tennis.append(game)
                         
-                        # If no upcoming real matches, use OpenAI to generate data
-                        if not upcoming_tennis:
-                            logger.info("No real tennis matches found for best parlay, generating with OpenAI")
-                            tennis_predictions = generate_tennis_predictions_with_openai("parlay", 5)
-                            if tennis_predictions:
-                                all_desc += tennis_predictions
-                                logger.info(f"Added {len(tennis_predictions)} OpenAI tennis predictions for best parlay")
-                        else:
+                        if upcoming_tennis:
                             all_desc += format_odds_for_ai(upcoming_tennis, sp)
+                            logger.info(f"Added {len(upcoming_tennis)} tennis matches for best parlay analysis")
+                        else:
+                            logger.warning("No tennis matches found for best parlay analysis")
                     else:
                         data = fetch_odds(API_KEY, url)
                         if data:
@@ -2420,102 +2217,15 @@ async def get_best_parlay(
                 logger.error(f"Error generating AI recommendation: {str(e)}")
                 logger.error(traceback.format_exc())
         
-        # Check if we specifically requested tennis and need to ensure a current tennis recommendation
-        tennis_requested = sport.lower() == "tennis" if sport else False
-        
-        # If we got here, AI generation failed or we had no games - generate directly with OpenAI
-        logger.warning("Using direct OpenAI recommendation for best_parlay")
-        
-        # For tennis requests, ensure we're using tennis-specific generation
-        if tennis_requested:
-            direct_recommendation = generate_tennis_recommendation_with_openai("parlay")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("parlay", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 65),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS"
-                }
-                bets_cache[cache_key] = result
-                return {"best_parlay": result}
-        else:
-            # Generic recommendation
-            client = openai.OpenAI(api_key=OPENAI_API_KEY)
-            prompt = """
-            Generate a high-quality parlay sports betting recommendation for upcoming games.
-            This must be for games that will happen in the next few days, NOT past games.
-            
-            Your recommendation should:
-            1. Include 2-3 real teams/players that have upcoming games
-            2. Explicitly reference that these are for upcoming future games (not past games)
-            3. Include specific future dates
-            4. Provide detailed statistical analysis and reasoning for each selection
-            
-            Return ONLY a valid JSON object with this exact format:
-            {
-                "sport": "[Sport Name or 'Mixed' for multi-sport]",
-                "parlay": "[Team/Player 1] & [Team/Player 2] (& [Team/Player 3] if applicable)",
-                "explanation": "[Detailed reasoning with specific data points for EACH pick and explicit mention these are future games]",
-                "confidence": [value between 60-75]
-            }
-            """
-            
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    temperature=0.7,
-                    max_tokens=500,
-                    messages=[
-                        {"role": "system", "content": "You are an expert sports betting analyst who knows all current teams, players, and games."},
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                
-                recommendation_text = response.choices[0].message.content.strip()
-                
-                # Try to parse the JSON
-                try:
-                    recommendation = json.loads(recommendation_text)
-                except json.JSONDecodeError:
-                    # If that fails, try to extract JSON with regex
-                    recommendation = extract_json(recommendation_text)
-                    if not recommendation:
-                        logger.error(f"Failed to parse OpenAI response as JSON: {recommendation_text}")
-                        return {"error": "Failed to generate recommendation"}
-                
-                result = {
-                    "recommendation": recommendation.get("parlay", ""),
-                    "explanation": recommendation.get("explanation", ""),
-                    "confidence": recommendation.get("confidence", 65),
-                    "last_updated": datetime.now(timezone.utc).isoformat(),
-                    "sport": recommendation.get("sport", "Mixed")
-                }
-                
-                bets_cache[cache_key] = result
-                return {"best_parlay": result}
-            except Exception as e:
-                logger.error(f"Error generating direct recommendation with OpenAI: {str(e)}")
-                return {"error": f"Failed to generate recommendation: {str(e)}"}
+        # If we got here, AI generation failed or we had no games
+        logger.warning("No valid games found for parlay analysis")
+        return {"error": "No games available for parlay analysis at this time. Please try again later."}
     except Exception as e:
         # Catch-all exception handler to ensure we always return something
         logger.error(f"Unhandled error in get_best_parlay: {str(e)}")
         logger.error(traceback.format_exc())
         
-        # Emergency fallback - generate with OpenAI
-        try:
-            direct_recommendation = generate_tennis_recommendation_with_openai("parlay")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("parlay", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 65),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": direct_recommendation.get("sport", "Mixed")
-                }
-                return {"best_parlay": result}
-        except:
-            return {"error": f"Failed to generate recommendation: {str(e)}"}
+        return {"error": f"Failed to generate recommendation: {str(e)}"}
 
 @app.get("/sport-best-pick")
 async def get_sport_best_pick(
@@ -2545,21 +2255,9 @@ async def get_sport_best_pick(
     # Special handling for tennis
     if sp == "TENNIS":
         logger.info("Fetching tennis matches for sport-specific best pick")
-        data = []
-        tennis_endpoints = [
-            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
-            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
-        ]
+        data = fetch_tennis_odds(API_KEY)
         
-        for endpoint in tennis_endpoints:
-            tennis_data = fetch_odds(API_KEY, endpoint)
-            if tennis_data:
-                # Add sport to each game
-                for game in tennis_data:
-                    game["sport"] = "TENNIS"
-                data.extend(tennis_data)
-        
-        # Filter for upcoming games only - use stricter filtering for tennis
+        # Filter for upcoming games only - more lenient for tennis
         current_time = datetime.now(timezone.utc)
         upcoming_games = []
         
@@ -2567,70 +2265,24 @@ async def get_sport_best_pick(
             if game.get("commence_time"):
                 try:
                     game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                    # Only include future matches strictly for tennis
-                    if game_time > current_time:
+                    # Include matches within the next 30 days
+                    if game_time > current_time and game_time < current_time + timedelta(days=30):
                         upcoming_games.append(game)
-                        logger.info(f"Including upcoming tennis match for best pick: {game['home_team']} vs {game['away_team']}")
+                        logger.info(f"Including upcoming tennis match for best pick: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                     else:
-                        logger.info(f"Excluding past tennis match: {game['home_team']} vs {game['away_team']}")
+                        logger.info(f"Excluding tennis match outside window: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                 except Exception as e:
                     logger.error(f"Error parsing tennis match time: {str(e)}")
-                    # For tennis, be strict and exclude if we can't verify it's future
-                    continue
+                    # Include matches even if we can't parse the time
+                    upcoming_games.append(game)
+            else:
+                # Include matches without time information
+                upcoming_games.append(game)
         
-        # If no upcoming matches, use OpenAI to generate data
+        # If no upcoming matches, return an error instead of using OpenAI
         if not upcoming_games:
-            logger.info("No real tennis matches found for sport-specific best pick, generating with OpenAI")
-            # Try direct OpenAI recommendation first
-            direct_recommendation = generate_tennis_recommendation_with_openai("straight")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("bet", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 75),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS"
-                }
-                bets_cache[cache_key] = result
-                
-                # Update metrics for API usage
-                if sheets_manager:
-                    try:
-                        metrics_data = {
-                            "type": "api_usage",
-                            "value": 1,
-                            "sport": sp,
-                            "details": "sport_best_pick endpoint"
-                        }
-                        sheets_manager.update_metrics(metrics_data)
-                    except Exception as e:
-                        logger.error(f"Error updating metrics for API usage: {str(e)}")
-                
-                return {"sport_best_pick": result}
-            
-            # Fallback to match prediction if direct recommendation fails
-            tennis_predictions = generate_tennis_predictions_with_openai("straight", 5)
-            if tennis_predictions:
-                # Format these into our standard format
-                formatted_data = []
-                formatted_data.extend(tennis_predictions)  # Add our OpenAI predictions
-                result = generate_best_pick_with_ai(formatted_data)
-                bets_cache[cache_key] = result
-                
-                # Update metrics for API usage
-                if sheets_manager and result and not result.get("error"):
-                    try:
-                        metrics_data = {
-                            "type": "api_usage",
-                            "value": 1,
-                            "sport": sp,
-                            "details": "sport_best_pick endpoint"
-                        }
-                        sheets_manager.update_metrics(metrics_data)
-                    except Exception as e:
-                        logger.error(f"Error updating metrics for API usage: {str(e)}")
-                
-                return {"sport_best_pick": result}
+            logger.warning("No tennis matches found for sport-specific best pick")
+            return {"error": "No tennis matches available for analysis at this time. Please try again later."}
         
         # If we have real data, use it
         formatted_descriptions = format_odds_for_ai(upcoming_games, sp)
@@ -2711,21 +2363,9 @@ async def get_sport_best_parlay(
     # Special handling for tennis
     if sp == "TENNIS":
         logger.info("Fetching tennis matches for sport-specific best parlay")
-        data = []
-        tennis_endpoints = [
-            "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
-            "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
-        ]
+        data = fetch_tennis_odds(API_KEY)
         
-        for endpoint in tennis_endpoints:
-            tennis_data = fetch_odds(API_KEY, endpoint)
-            if tennis_data:
-                # Add sport to each game
-                for game in tennis_data:
-                    game["sport"] = "TENNIS"
-                data.extend(tennis_data)
-        
-        # Filter for upcoming games only - use stricter filtering for tennis
+        # Filter for upcoming games only - more lenient for tennis
         current_time = datetime.now(timezone.utc)
         upcoming_games = []
         
@@ -2733,70 +2373,24 @@ async def get_sport_best_parlay(
             if game.get("commence_time"):
                 try:
                     game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                    # Only include future matches strictly for tennis
-                    if game_time > current_time:
+                    # Include matches within the next 30 days
+                    if game_time > current_time and game_time < current_time + timedelta(days=30):
                         upcoming_games.append(game)
-                        logger.info(f"Including upcoming tennis match for parlay: {game['home_team']} vs {game['away_team']}")
+                        logger.info(f"Including upcoming tennis match for parlay: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                     else:
-                        logger.info(f"Excluding past tennis match: {game['home_team']} vs {game['away_team']}")
+                        logger.info(f"Excluding tennis match outside window: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
                 except Exception as e:
                     logger.error(f"Error parsing tennis match time: {str(e)}")
-                    # For tennis, be strict and exclude if we can't verify it's future
-                    continue
+                    # Include matches even if we can't parse the time
+                    upcoming_games.append(game)
+            else:
+                # Include matches without time information
+                upcoming_games.append(game)
         
-        # If no upcoming matches, use OpenAI to generate data
+        # If no upcoming matches, return an error instead of using OpenAI
         if not upcoming_games:
-            logger.info("No real tennis matches found for sport-specific parlay, generating with OpenAI")
-            # Try direct OpenAI recommendation first
-            direct_recommendation = generate_tennis_recommendation_with_openai("parlay")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("parlay", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 65),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS"
-                }
-                bets_cache[cache_key] = result
-                
-                # Update metrics for API usage
-                if sheets_manager:
-                    try:
-                        metrics_data = {
-                            "type": "api_usage",
-                            "value": 1,
-                            "sport": sp,
-                            "details": "sport_best_parlay endpoint"
-                        }
-                        sheets_manager.update_metrics(metrics_data)
-                    except Exception as e:
-                        logger.error(f"Error updating metrics for API usage: {str(e)}")
-                
-                return {"sport_best_parlay": result}
-            
-            # Fallback to match prediction if direct recommendation fails
-            tennis_predictions = generate_tennis_predictions_with_openai("parlay", 5)
-            if tennis_predictions:
-                # Format these into our standard format
-                formatted_data = []
-                formatted_data.extend(tennis_predictions)  # Add our OpenAI predictions
-                result = generate_best_parlay_with_ai(formatted_data)
-                bets_cache[cache_key] = result
-                
-                # Update metrics for API usage
-                if sheets_manager and result and not result.get("error"):
-                    try:
-                        metrics_data = {
-                            "type": "api_usage",
-                            "value": 1,
-                            "sport": sp,
-                            "details": "sport_best_parlay endpoint"
-                        }
-                        sheets_manager.update_metrics(metrics_data)
-                    except Exception as e:
-                        logger.error(f"Error updating metrics for API usage: {str(e)}")
-                
-                return {"sport_best_parlay": result}
+            logger.warning("No tennis matches found for sport-specific best parlay")
+            return {"error": "No tennis matches available for parlay analysis at this time. Please try again later."}
         
         # If we have real data, use it
         formatted_descriptions = format_odds_for_ai(upcoming_games, sp)
@@ -2894,18 +2488,8 @@ async def get_player_best_bet(
         
         # For tennis, try multiple endpoints
         if sp == "TENNIS":
-            odds_data = []
-            tennis_endpoints = [
-                "https://api.the-odds-api.com/v4/sports/tennis_atp/odds",
-                "https://api.the-odds-api.com/v4/sports/tennis_wta/odds"
-            ]
-            
-            for endpoint in tennis_endpoints:
-                tennis_props = fetch_odds(API_KEY, endpoint, markets="player_props")
-                if tennis_props:
-                    for game in tennis_props:
-                        game["sport"] = "TENNIS"
-                    odds_data.extend(tennis_props)
+            logger.info("Fetching tennis player props from multiple endpoints")
+            odds_data = fetch_tennis_odds(API_KEY, markets="player_props")
         else:
             odds_data = fetch_odds(API_KEY, base_url, markets="player_props")
         
@@ -2951,43 +2535,10 @@ async def get_player_best_bet(
         logger.error(f"Error fetching player props from odds API: {str(e)}")
         logger.error(traceback.format_exc())
     
-    # If still none for tennis, use OpenAI
+    # If still none for tennis, return an error instead of using OpenAI
     if not player_descriptions and sp == "TENNIS":
-        logger.warning(f"No player data available for {sp} from APIs, using OpenAI")
-        # Use OpenAI to generate realistic player props
-        tennis_props = generate_tennis_predictions_with_openai("player_prop", 5)
-        if tennis_props:
-            player_descriptions = tennis_props
-            success_source = "OpenAI"
-            logger.info(f"Generated {len(player_descriptions)} tennis player props with OpenAI")
-        else:
-            # Try a direct recommendation if game generation fails
-            direct_recommendation = generate_tennis_recommendation_with_openai("player_prop")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("player_bet", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 70),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS",
-                    "data_source": "OpenAI Direct"
-                }
-                bets_cache[cache_key] = result
-                
-                # Update metrics for API usage
-                if sheets_manager:
-                    try:
-                        metrics_data = {
-                            "type": "api_usage",
-                            "value": 1,
-                            "sport": sp,
-                            "details": f"player_best_bet endpoint (source: OpenAI Direct)"
-                        }
-                        sheets_manager.update_metrics(metrics_data)
-                    except Exception as e:
-                        logger.error(f"Error updating metrics for API usage: {str(e)}")
-                
-                return {"best_player_bet": result}
+        logger.warning(f"No player data available for {sp} from APIs")
+        return {"best_player_bet": f"Player prop bets are currently unavailable for {sport}. Please try again later."}
     
     # 3) If still none for MLB and MLS, use OpenAI
     if not player_descriptions and sp in ["MLB", "MLS"]:
@@ -3065,34 +2616,9 @@ async def get_player_best_bet(
         
         return {"best_player_bet": result}
     else:
-        # If player prop generation failed, use a direct recommendation as fallback
+        # If player prop generation failed for tennis, return an error
         if sp == "TENNIS":
-            direct_recommendation = generate_tennis_recommendation_with_openai("player_prop")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("player_bet", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 70),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS",
-                    "data_source": "OpenAI Direct"
-                }
-                bets_cache[cache_key] = result
-                
-                # Update metrics for API usage
-                if sheets_manager:
-                    try:
-                        metrics_data = {
-                            "type": "api_usage",
-                            "value": 1,
-                            "sport": sp,
-                            "details": f"player_best_bet endpoint (source: OpenAI Direct)"
-                        }
-                        sheets_manager.update_metrics(metrics_data)
-                    except Exception as e:
-                        logger.error(f"Error updating metrics for API usage: {str(e)}")
-                
-                return {"best_player_bet": result}
+            return {"best_player_bet": f"Unable to generate player prop recommendations for {sport} at this time. Please try again later."}
         
         return {"best_player_bet": result}
 
