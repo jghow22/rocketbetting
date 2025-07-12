@@ -516,6 +516,171 @@ SPORT_DISPLAY_NAMES: Dict[str, str] = {
 games_cache = TTLCache(maxsize=100, ttl=600) # Cache games for 10 minutes
 bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 minutes
 
+def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: bool = True) -> List[Dict[str, Any]]:
+    """
+    Filter games to only include current day and future events.
+    
+    Args:
+        games_data: List of game data from API
+        current_day_only: If True, only include games from today. If False, include today and future.
+    
+    Returns:
+        Filtered list of games
+    """
+    if not games_data:
+        return []
+    
+    current_time = datetime.now(timezone.utc)
+    current_date = current_time.date()
+    
+    # For current day only, we want games that start within the next 24 hours from now
+    if current_day_only:
+        tomorrow = current_date + timedelta(days=1)
+        cutoff_time = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=timezone.utc)
+    else:
+        # For future games, just exclude past games
+        cutoff_time = current_time
+    
+    filtered_games = []
+    
+    for game in games_data:
+        if not game.get("commence_time"):
+            logger.warning(f"Game missing commence_time: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}")
+            continue
+        
+        try:
+            # Parse the game time
+            game_time_str = game["commence_time"]
+            if game_time_str.endswith('Z'):
+                game_time_str = game_time_str[:-1] + '+00:00'
+            
+            game_time = datetime.fromisoformat(game_time_str)
+            
+            # Check if game is in the future relative to our cutoff
+            if game_time >= cutoff_time:
+                filtered_games.append(game)
+                logger.info(f"Including game: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')} at {game_time}")
+            else:
+                logger.info(f"Excluding past game: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')} at {game_time}")
+                
+        except Exception as e:
+            logger.error(f"Error parsing game time for {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}: {str(e)}")
+            # For safety, exclude games with unparseable times
+            continue
+    
+    logger.info(f"Filtered {len(games_data)} games down to {len(filtered_games)} current/future games")
+    return filtered_games
+
+def generate_current_day_tennis_predictions(match_type="straight", count=3):
+    """
+    Generate tennis predictions specifically for current day events.
+    
+    Args:
+        match_type: Type of prediction ("straight", "parlay", or "player_prop")
+        count: Number of predictions to generate
+    
+    Returns:
+        List of formatted tennis match predictions for today
+    """
+    logger.info(f"Generating {count} current day tennis {match_type} predictions with OpenAI")
+    
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # Craft type-specific prompts for current day only
+    if match_type == "straight":
+        prompt = f"""
+        Generate {count} realistic tennis matches for TODAY ({current_date}) only.
+        These must be matches that are scheduled to happen TODAY.
+        
+        For each match:
+        1. Include two real current ATP/WTA players who might reasonably play each other TODAY
+        2. Include realistic odds (e.g., 1.5-3.0 range)
+        3. The date MUST be {current_date} (today)
+        4. Mention the tournament/event name
+        5. Include a realistic time for today (between 10:00 and 22:00 UTC)
+        
+        Format each match exactly like this example:
+        TENNIS: Novak Djokovic vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, today
+        """
+    elif match_type == "parlay":
+        prompt = f"""
+        Generate {count} realistic tennis matches for TODAY ({current_date}) for parlay betting.
+        These must be different matches scheduled for TODAY.
+        
+        For each match:
+        1. Include two real current ATP/WTA players who might reasonably play each other TODAY
+        2. Include realistic odds (e.g., 1.5-3.0 range)
+        3. The date MUST be {current_date} (today)
+        4. Mention the tournament/event name
+        5. Include a realistic time for today (between 10:00 and 22:00 UTC)
+        
+        Format each match exactly like this example:
+        TENNIS: Novak Djokovic vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, today
+        """
+    elif match_type == "player_prop":
+        prompt = f"""
+        Generate {count} realistic tennis player prop bets for TODAY ({current_date}).
+        These must be for matches scheduled for TODAY.
+        
+        For each prop bet:
+        1. Include a real current ATP/WTA player
+        2. Include their opponent
+        3. Include a realistic prop type (aces, games won, etc.)
+        4. Include realistic odds and lines
+        5. The date MUST be {current_date} (today)
+        6. Mention the tournament/event name
+        7. Include a realistic time for today (between 10:00 and 22:00 UTC)
+        
+        Format each prop exactly like this example:
+        TENNIS: Novak Djokovic - Total Aces (10.5) in Djokovic vs Alcaraz on {current_date} at 14:00 UTC | Odds: 1.85 (54.1% implied probability) | Match: Djokovic vs Alcaraz | Tournament: US Open 2023
+        """
+    
+    try:
+        # Use OpenAI to generate tennis predictions
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            temperature=0.7,
+            max_tokens=500,
+            messages=[
+                {"role": "system", "content": "You are an expert tennis analyst who knows all current tennis players, tournaments, and odds. Only generate matches for TODAY."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        predictions_text = response.choices[0].message.content.strip()
+        predictions = [line.strip() for line in predictions_text.split('\n') if line.strip().startswith("TENNIS:")]
+        
+        # Filter to ensure they're all for today
+        filtered_predictions = []
+        current_date_obj = datetime.now().date()
+        
+        for prediction in predictions:
+            # Try to extract the date from the prediction
+            date_match = re.search(r'on (\d{4}-\d{2}-\d{2})', prediction)
+            if date_match:
+                try:
+                    match_date = datetime.strptime(date_match.group(1), '%Y-%m-%d').date()
+                    # Only include if the date is today
+                    if match_date == current_date_obj:
+                        filtered_predictions.append(prediction)
+                    else:
+                        logger.warning(f"Filtering out non-today date in OpenAI prediction: {prediction}")
+                except Exception as e:
+                    # If we can't parse the date, exclude it
+                    logger.warning(f"Could not parse date in prediction: {prediction}")
+            else:
+                # If no date found, exclude it
+                logger.warning(f"No date found in prediction: {prediction}")
+        
+        logger.info(f"Generated {len(filtered_predictions)} valid current day tennis predictions with OpenAI")
+        return filtered_predictions
+        
+    except Exception as e:
+        logger.error(f"Error generating current day tennis predictions with OpenAI: {str(e)}")
+        logger.error(traceback.format_exc())
+        return []
+
 def generate_tennis_predictions_with_openai(match_type="straight", count=3):
     """
     Generate tennis predictions using OpenAI when real data is unavailable.
@@ -530,52 +695,54 @@ def generate_tennis_predictions_with_openai(match_type="straight", count=3):
     logger.info(f"Generating {count} tennis {match_type} predictions with OpenAI")
     
     current_date = datetime.now().strftime("%Y-%m-%d")
-    one_week_later = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
     
     # Craft type-specific prompts
     if match_type == "straight":
         prompt = f"""
-        Generate {count} realistic upcoming tennis matches for betting analysis. 
-        These must be matches that could plausibly occur between {current_date} and {one_week_later}.
+        Generate {count} realistic tennis matches for TODAY ({current_date}) only.
+        These must be matches that are scheduled to happen TODAY.
         
         For each match:
-        1. Include two real current ATP/WTA players who might reasonably play each other
+        1. Include two real current ATP/WTA players who might reasonably play each other TODAY
         2. Include realistic odds (e.g., 1.5-3.0 range)
-        3. Include a realistic date in the future (between {current_date} and {one_week_later})
+        3. The date MUST be {current_date} (today)
         4. Mention the tournament/event name
+        5. Include a realistic time for today (between 10:00 and 22:00 UTC)
         
         Format each match exactly like this example:
-        TENNIS: Novak Djokovic vs Carlos Alcaraz on 2023-10-15 at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, upcoming
+        TENNIS: Novak Djokovic vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, today
         """
     elif match_type == "parlay":
         prompt = f"""
-        Generate {count} realistic upcoming tennis matches for parlay betting analysis.
-        These must be different matches that could plausibly occur between {current_date} and {one_week_later}.
+        Generate {count} realistic tennis matches for TODAY ({current_date}) for parlay betting.
+        These must be different matches scheduled for TODAY.
         
         For each match:
-        1. Include two real current ATP/WTA players who might reasonably play each other
+        1. Include two real current ATP/WTA players who might reasonably play each other TODAY
         2. Include realistic odds (e.g., 1.5-3.0 range)
-        3. Include a realistic date in the future (between {current_date} and {one_week_later})
+        3. The date MUST be {current_date} (today)
         4. Mention the tournament/event name
+        5. Include a realistic time for today (between 10:00 and 22:00 UTC)
         
         Format each match exactly like this example:
-        TENNIS: Novak Djokovic vs Carlos Alcaraz on 2023-10-15 at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, upcoming
+        TENNIS: Novak Djokovic vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, today
         """
     elif match_type == "player_prop":
         prompt = f"""
-        Generate {count} realistic tennis player prop bets for upcoming matches.
-        These must be for matches that could plausibly occur between {current_date} and {one_week_later}.
+        Generate {count} realistic tennis player prop bets for TODAY ({current_date}).
+        These must be for matches scheduled for TODAY.
         
         For each prop bet:
         1. Include a real current ATP/WTA player
         2. Include their opponent
         3. Include a realistic prop type (aces, games won, etc.)
         4. Include realistic odds and lines
-        5. Include a realistic date in the future (between {current_date} and {one_week_later})
+        5. The date MUST be {current_date} (today)
         6. Mention the tournament/event name
+        7. Include a realistic time for today (between 10:00 and 22:00 UTC)
         
         Format each prop exactly like this example:
-        TENNIS: Novak Djokovic - Total Aces (10.5) in Djokovic vs Alcaraz on 2023-10-15 | Odds: 1.85 (54.1% implied probability) | Match: Djokovic vs Alcaraz | Tournament: US Open 2023
+        TENNIS: Novak Djokovic - Total Aces (10.5) in Djokovic vs Alcaraz on {current_date} at 14:00 UTC | Odds: 1.85 (54.1% implied probability) | Match: Djokovic vs Alcaraz | Tournament: US Open 2023
         """
     
     try:
@@ -637,52 +804,51 @@ def generate_tennis_recommendation_with_openai(bet_type="straight"):
     logger.info(f"Generating complete tennis {bet_type} recommendation with OpenAI")
     
     current_date = datetime.now().strftime("%Y-%m-%d")
-    one_week_later = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
     
     # Craft type-specific prompts
     if bet_type == "straight":
         prompt = f"""
-        Generate a realistic tennis betting recommendation for an upcoming match.
+        Generate a realistic tennis betting recommendation for TODAY ({current_date}).
         
         Your recommendation should:
         1. Include real current ATP/WTA players
-        2. Be for a match happening between {current_date} and {one_week_later}
+        2. Be for a match happening TODAY ({current_date})
         3. Include realistic odds and analysis
-        4. Focus on upcoming tournaments (ATP/WTA tour events)
+        4. Focus on current day tournaments (ATP/WTA tour events)
         
         Return ONLY a valid JSON object:
         {{
             "sport": "TENNIS",
             "bet": "[Player Name] to win vs [Opponent]",
-            "explanation": "[Detailed analysis mentioning this is for an upcoming match]",
+            "explanation": "[Detailed analysis mentioning this is for TODAY's match]",
             "confidence": [65-85]
         }}
         """
     elif bet_type == "parlay":
         prompt = f"""
-        Generate a tennis parlay recommendation with 2-3 upcoming matches.
+        Generate a tennis parlay recommendation with 2-3 matches for TODAY ({current_date}).
         
-        Include real ATP/WTA players in matches between {current_date} and {one_week_later}.
+        Include real ATP/WTA players in matches happening TODAY.
         
         Return ONLY a valid JSON object:
         {{
             "sport": "TENNIS", 
             "parlay": "[Player 1] & [Player 2] & [Player 3]",
-            "explanation": "[Analysis for each pick mentioning upcoming matches]",
+            "explanation": "[Analysis for each pick mentioning TODAY's matches]",
             "confidence": [60-75]
         }}
         """
     elif bet_type == "player_prop":
         prompt = f"""
-        Generate a tennis player prop bet for an upcoming match.
+        Generate a tennis player prop bet for TODAY ({current_date}).
         
-        Include a real ATP/WTA player in a match between {current_date} and {one_week_later}.
+        Include a real ATP/WTA player in a match happening TODAY.
         
         Return ONLY a valid JSON object:
         {{
             "sport": "TENNIS",
-            "player_bet": "[Player Name] - [Prop Type] in upcoming match",
-            "explanation": "[Analysis mentioning this is for an upcoming match]", 
+            "player_bet": "[Player Name] - [Prop Type] in today's match",
+            "explanation": "[Analysis mentioning this is for TODAY's match]", 
             "confidence": [65-80]
         }}
         """
@@ -1738,29 +1904,13 @@ async def get_games(
                         game["sport"] = "TENNIS"
                     data.extend(tennis_data)
             
-            # Filter for upcoming matches only
-            current_time = datetime.now(timezone.utc)
-            upcoming_games = []
+            # Filter for current day matches only
+            data = filter_games_by_date(data, current_day_only=True)
             
-            for game in data:
-                if game.get("commence_time"):
-                    try:
-                        game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                        # Only include future tennis matches
-                        if game_time > current_time:
-                            upcoming_games.append(game)
-                            logger.info(f"Including upcoming tennis match: {game['home_team']} vs {game['away_team']}")
-                        else:
-                            logger.info(f"Excluding past tennis match: {game['home_team']} vs {game['away_team']}")
-                    except Exception as e:
-                        logger.error(f"Error parsing tennis match time: {str(e)}")
-                        # For tennis, be strict and exclude if we can't verify the time
-                        continue
-            
-            # If no upcoming real matches, use OpenAI to generate data
-            if not upcoming_games:
-                logger.info("No real tennis matches found, generating with OpenAI")
-                tennis_predictions = generate_tennis_predictions_with_openai("straight", 5)
+            # If no current day real matches, use OpenAI to generate data
+            if not data:
+                logger.info("No real current day tennis matches found, generating with OpenAI")
+                tennis_predictions = generate_current_day_tennis_predictions("straight", 5)
                 
                 # Transform these predictions into game data format
                 if tennis_predictions:
@@ -1822,9 +1972,7 @@ async def get_games(
                                     }
                                 ]
                             }
-                            upcoming_games.append(game_data)
-            
-            data = upcoming_games
+                            data.append(game_data)
         else:
             url = SPORTS_BASE_URLS.get(sp)
             if not url:
@@ -1868,31 +2016,13 @@ async def get_games(
                         game["sport"] = "TENNIS"
                     tennis_data.extend(endpoint_data)
             
-            # Filter for upcoming tennis matches only
-            current_time = datetime.now(timezone.utc)
-            upcoming_tennis = []
+            # Filter for current day tennis matches only
+            tennis_data = filter_games_by_date(tennis_data, current_day_only=True)
             
-            for game in tennis_data:
-                if game.get("commence_time"):
-                    try:
-                        game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                        # Only include future tennis matches
-                        if game_time > current_time:
-                            upcoming_tennis.append(game)
-                            # Store each game in the Games tab
-                            if sheets_manager:
-                                try:
-                                    sheets_manager.store_game(game)
-                                except Exception as e:
-                                    logger.error(f"Error storing tennis game in Games sheet: {str(e)}")
-                    except Exception as e:
-                        logger.error(f"Error parsing tennis match time: {str(e)}")
-                        # Exclude if we can't verify the time for tennis
-            
-            # If no upcoming real matches, use OpenAI to generate data
-            if not upcoming_tennis:
-                logger.info("No real tennis matches found for all sports view, generating with OpenAI")
-                tennis_predictions = generate_tennis_predictions_with_openai("straight", 5)
+            # If no current day real matches, use OpenAI to generate data
+            if not tennis_data:
+                logger.info("No real current day tennis matches found for all sports view, generating with OpenAI")
+                tennis_predictions = generate_current_day_tennis_predictions("straight", 5)
                 
                 # Transform these predictions into game data format
                 if tennis_predictions:
@@ -1954,7 +2084,7 @@ async def get_games(
                                     }
                                 ]
                             }
-                            upcoming_tennis.append(game_data)
+                            tennis_data.append(game_data)
                             
                             # Store in Games sheet
                             if sheets_manager:
@@ -1963,13 +2093,16 @@ async def get_games(
                                 except Exception as e:
                                     logger.error(f"Error storing generated tennis game in Games sheet: {str(e)}")
             
-            all_games.extend(upcoming_tennis)
+            all_games.extend(tennis_data)
         else:
             data = fetch_odds(API_KEY, url)
             if data:
                 # Add sport to each game
                 for game in data:
                     game["sport"] = sp
+                
+                # Filter for current day matches only
+                data = filter_games_by_date(data, current_day_only=True)
                 
                 # Store each game in the Games tab
                 if sheets_manager:
@@ -2037,16 +2170,21 @@ async def get_best_pick(
             try:
                 if sp == "TENNIS":
                     # Generate tennis data with OpenAI since real data is problematic
-                    tennis_predictions = generate_tennis_predictions_with_openai("straight", 3)
+                    tennis_predictions = generate_current_day_tennis_predictions("straight", 3)
                     if tennis_predictions:
                         all_desc.extend(tennis_predictions)
-                        logger.info(f"Added {len(tennis_predictions)} OpenAI tennis predictions")
+                        logger.info(f"Added {len(tennis_predictions)} OpenAI current day tennis predictions")
                 else:
                     data = fetch_odds(API_KEY, url)
                     if data:
                         for game in data:
                             game["sport"] = sp
-                        all_desc.extend(format_odds_for_ai(data, sp))
+                        
+                        # Filter for current day matches only
+                        data = filter_games_by_date(data, current_day_only=True)
+                        
+                        if data:
+                            all_desc.extend(format_odds_for_ai(data, sp))
             except Exception as e:
                 logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         
@@ -2129,16 +2267,21 @@ async def get_best_parlay(
             try:
                 if sp == "TENNIS":
                     # Generate tennis data with OpenAI since real data is problematic
-                    tennis_predictions = generate_tennis_predictions_with_openai("parlay", 3)
+                    tennis_predictions = generate_current_day_tennis_predictions("parlay", 3)
                     if tennis_predictions:
                         all_desc.extend(tennis_predictions)
-                        logger.info(f"Added {len(tennis_predictions)} OpenAI tennis predictions for parlay")
+                        logger.info(f"Added {len(tennis_predictions)} OpenAI current day tennis predictions for parlay")
                 else:
                     data = fetch_odds(API_KEY, url)
                     if data:
                         for game in data:
                             game["sport"] = sp
-                        all_desc.extend(format_odds_for_ai(data, sp))
+                        
+                        # Filter for current day matches only
+                        data = filter_games_by_date(data, current_day_only=True)
+                        
+                        if data:
+                            all_desc.extend(format_odds_for_ai(data, sp))
             except Exception as e:
                 logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         
@@ -2235,9 +2378,15 @@ async def get_sport_best_pick(
         if not data:
             return {"error": f"No games found for {sp}."}
         
-        # Don't store games anymore, just format them for AI
+        # Add sport to each game
         for game in data:
             game["sport"] = sp
+        
+        # Filter for current day matches only
+        data = filter_games_by_date(data, current_day_only=True)
+        
+        if not data:
+            return {"error": f"No current day games found for {sp}."}
         
         result = generate_best_pick_with_ai(format_odds_for_ai(data, sp))
         bets_cache[cache_key] = result
@@ -2323,9 +2472,15 @@ async def get_sport_best_parlay(
         if not data:
             return {"error": f"No games found for {sp}."}
         
-        # Don't store games anymore, just format them for AI
+        # Add sport to each game
         for game in data:
             game["sport"] = sp
+        
+        # Filter for current day matches only
+        data = filter_games_by_date(data, current_day_only=True)
+        
+        if not data:
+            return {"error": f"No current day games found for {sp}."}
         
         result = generate_best_parlay_with_ai(format_odds_for_ai(data, sp))
         bets_cache[cache_key] = result
@@ -2421,23 +2576,10 @@ async def get_player_best_bet(
         if odds_data:
             logger.info(f"Retrieved player props from odds API for {sport}: {len(odds_data)} games")
             
-            # Filter for upcoming games only
-            current_time = datetime.now(timezone.utc)
-            upcoming_games = []
+            # Filter for current day games only
+            odds_data = filter_games_by_date(odds_data, current_day_only=True)
             
-            for game in odds_data:
-                if game.get("commence_time"):
-                    try:
-                        game_time = datetime.fromisoformat(game["commence_time"].replace('Z', '+00:00'))
-                        if game_time > current_time:
-                            upcoming_games.append(game)
-                    except Exception as e:
-                        logger.error(f"Error parsing match time: {str(e)}")
-                        upcoming_games.append(game)
-                else:
-                    upcoming_games.append(game)
-            
-            player_descriptions = format_player_odds_for_ai(upcoming_games, sp)
+            player_descriptions = format_player_odds_for_ai(odds_data, sp)
             if player_descriptions:
                 success_source = "Odds API"
                 logger.info(f"Successfully formatted {len(player_descriptions)} player props from Odds API")
