@@ -1982,8 +1982,8 @@ async def get_games(
             if not data:
                 return {"error": f"No games found for {sp}."}
         
-        # Store each game in the Games tab
-        if sheets_manager:
+        # Only store games that are actually displayed in the UI (limit to prevent rate limiting)
+        if sheets_manager and len(data) <= 20:  # Only store if we have a reasonable number of games
             logger.info(f"Storing {len(data)} games for {sp} in Games sheet")
             for game in data:
                 game["sport"] = sp
@@ -1991,6 +1991,8 @@ async def get_games(
                     sheets_manager.store_game(game)
                 except Exception as e:
                     logger.error(f"Error storing game in Games sheet: {str(e)}")
+        elif sheets_manager and len(data) > 20:
+            logger.info(f"Skipping storage of {len(data)} games for {sp} to prevent rate limiting")
         
         formatted_data = format_games_response(data)
         games_cache[cache_key] = formatted_data
@@ -2104,13 +2106,15 @@ async def get_games(
                 # Filter for current day matches only
                 data = filter_games_by_date(data, current_day_only=True)
                 
-                # Store each game in the Games tab
-                if sheets_manager:
+                # Only store games that are actually displayed in the UI (limit to prevent rate limiting)
+                if sheets_manager and len(data) <= 20:  # Only store if we have a reasonable number of games
                     try:
                         for game in data:
                             sheets_manager.store_game(game)
                     except Exception as e:
                         logger.error(f"Error storing game in Games sheet: {str(e)}")
+                elif sheets_manager and len(data) > 20:
+                    logger.info(f"Skipping storage of {len(data)} games for {sp} to prevent rate limiting")
                 
                 all_games.extend(data)
     
