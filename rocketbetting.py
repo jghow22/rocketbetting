@@ -1282,6 +1282,13 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
             "\n\nVERY IMPORTANT: Your recommendation MUST explicitly state that it is for an upcoming match and include an approximate date."
         )
     
+    # Limit the number of games to prevent token limit issues
+    max_games = 25  # Limit to 25 games to stay within token limits
+    limited_descriptions = game_descriptions[:max_games]
+    
+    if len(game_descriptions) > max_games:
+        logger.info(f"Limited game descriptions from {len(game_descriptions)} to {max_games} to prevent token limit issues")
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
@@ -1298,7 +1305,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         '\n{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Detailed reasoning with specific data points]", "confidence": [0-100]}'
         "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
         "\n\nMake sure to mention EXPLICITLY in your explanation that this bet is for an UPCOMING match/game that will happen in the future."
-        "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
+        "\n\n" + sport_line + "\n" + "\n".join(limited_descriptions)
     )
     
     try:
@@ -1413,6 +1420,13 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
             "\n\nVERY IMPORTANT: Your recommendation MUST explicitly state that these are upcoming matches and include approximate dates."
         )
     
+    # Limit the number of games to prevent token limit issues
+    max_games = 20  # Limit to 20 games to stay within token limits
+    limited_descriptions = game_descriptions[:max_games]
+    
+    if len(game_descriptions) > max_games:
+        logger.info(f"Limited game descriptions from {len(game_descriptions)} to {max_games} to prevent token limit issues")
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
@@ -1429,7 +1443,7 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         '\n{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Detailed reasoning with specific data points for EACH pick]", "confidence": [0-100]}'
         "\n\nNote: Parlay confidence should generally be lower than straight bets due to compounding risk. Only assign confidence scores above 70 in extraordinary circumstances."
         "\n\nMake sure to mention EXPLICITLY in your explanation that this parlay is for UPCOMING matches/games that will happen in the future."
-        "\n\n" + sport_line + "\n" + "\n".join(game_descriptions)
+        "\n\n" + sport_line + "\n" + "\n".join(limited_descriptions)
     )
     
     try:
