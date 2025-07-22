@@ -3223,6 +3223,49 @@ async def test_prediction_api():
         logger.error(traceback.format_exc())
         return {"error": f"Test failed: {str(e)}"}
 
+@app.get("/weather")
+async def get_weather(
+    lat: Optional[float] = Query(None, description="Latitude"),
+    lon: Optional[float] = Query(None, description="Longitude"),
+    location: Optional[str] = Query(None, description="Location name (city, country)")
+):
+    """
+    Get weather forecast data from OpenWeatherMap API
+    """
+    try:
+        # Get API key from environment
+        weather_api_key = os.getenv('OPENWEATHER_API_KEY')
+        if not weather_api_key:
+            raise HTTPException(status_code=500, detail="Weather API key not configured")
+        
+        # Build API URL based on parameters
+        if lat is not None and lon is not None:
+            # Use coordinates
+            api_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={weather_api_key}&units=imperial"
+        elif location:
+            # Use location name
+            api_url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={weather_api_key}&units=imperial"
+        else:
+            raise HTTPException(status_code=400, detail="Either lat/lon or location parameter is required")
+        
+        # Make request to OpenWeatherMap
+        response = requests.get(api_url, timeout=10)
+        response.raise_for_status()
+        
+        weather_data = response.json()
+        
+        # Log successful request
+        logger.info(f"Weather data retrieved for {'coordinates' if lat and lon else 'location'}: {lat},{lon if lat and lon else location}")
+        
+        return weather_data
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Weather API request failed: {str(e)}")
+        raise HTTPException(status_code=503, detail=f"Weather service unavailable: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error getting weather data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @app.get("/simple-pick")
 async def get_simple_pick():
     """
