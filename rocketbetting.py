@@ -3247,9 +3247,11 @@ async def get_weather(
             api_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={weather_api_key}&units=imperial"
             logger.info(f"Using coordinates: lat={lat}, lon={lon}")
         elif location:
-            # Use location name
-            api_url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={weather_api_key}&units=imperial"
-            logger.info(f"Using location: {location}")
+            # Use location name - clean up the location format
+            # Remove extra spaces and ensure proper format for OpenWeather
+            clean_location = location.strip().replace('  ', ' ')
+            api_url = f"https://api.openweathermap.org/data/2.5/forecast?q={clean_location}&appid={weather_api_key}&units=imperial"
+            logger.info(f"Using location: {clean_location}")
         else:
             raise HTTPException(status_code=400, detail="Either lat/lon or location parameter is required")
         
@@ -3297,8 +3299,8 @@ async def test_weather_key():
                 "details": "Please add OPENWEATHER_API_KEY to your environment variables"
             }
         
-        # Test with a simple location
-        test_url = f"https://api.openweathermap.org/data/2.5/forecast?q=London&appid={weather_api_key}&units=imperial"
+        # Test with a simple location - use a more reliable format
+        test_url = f"https://api.openweathermap.org/data/2.5/forecast?q=London,UK&appid={weather_api_key}&units=imperial"
         
         logger.info(f"Testing weather API key with URL: {test_url.replace(weather_api_key, '***')}")
         
