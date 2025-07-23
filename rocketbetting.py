@@ -3235,27 +3235,42 @@ async def get_weather(
     try:
         # Get API key from environment
         weather_api_key = os.getenv('OPENWEATHER_API_KEY')
+        logger.info(f"Weather API key found: {'Yes' if weather_api_key else 'No'}")
+        
         if not weather_api_key:
+            logger.error("Weather API key not configured in environment variables")
             raise HTTPException(status_code=500, detail="Weather API key not configured")
         
         # Build API URL based on parameters
         if lat is not None and lon is not None:
             # Use coordinates
             api_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={weather_api_key}&units=imperial"
+            logger.info(f"Using coordinates: lat={lat}, lon={lon}")
         elif location:
             # Use location name
             api_url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={weather_api_key}&units=imperial"
+            logger.info(f"Using location: {location}")
         else:
             raise HTTPException(status_code=400, detail="Either lat/lon or location parameter is required")
         
+        logger.info(f"Making request to OpenWeatherMap API: {api_url.replace(weather_api_key, '***')}")
+        
         # Make request to OpenWeatherMap
         response = requests.get(api_url, timeout=10)
-        response.raise_for_status()
+        
+        # Log response details for debugging
+        logger.info(f"OpenWeatherMap response status: {response.status_code}")
+        logger.info(f"OpenWeatherMap response headers: {dict(response.headers)}")
+        
+        if response.status_code != 200:
+            error_text = response.text
+            logger.error(f"OpenWeatherMap API error: {response.status_code} - {error_text}")
+            raise HTTPException(status_code=503, detail=f"Weather API error: {response.status_code} - {error_text}")
         
         weather_data = response.json()
         
         # Log successful request
-        logger.info(f"Weather data retrieved for {'coordinates' if lat and lon else 'location'}: {lat},{lon if lat and lon else location}")
+        logger.info(f"Weather data retrieved successfully for {'coordinates' if lat and lon else 'location'}: {lat},{lon if lat and lon else location}")
         
         return weather_data
         
@@ -3264,7 +3279,57 @@ async def get_weather(
         raise HTTPException(status_code=503, detail=f"Weather service unavailable: {str(e)}")
     except Exception as e:
         logger.error(f"Error getting weather data: {str(e)}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/test-weather-key")
+async def test_weather_key():
+    """
+    Test if the OpenWeather API key is configured and working
+    """
+    try:
+        weather_api_key = os.getenv('OPENWEATHER_API_KEY')
+        
+        if not weather_api_key:
+            return {
+                "status": "error",
+                "message": "Weather API key not configured",
+                "details": "Please add OPENWEATHER_API_KEY to your environment variables"
+            }
+        
+        # Test with a simple location
+        test_url = f"https://api.openweathermap.org/data/2.5/forecast?q=London&appid={weather_api_key}&units=imperial"
+        
+        logger.info(f"Testing weather API key with URL: {test_url.replace(weather_api_key, '***')}")
+        
+        response = requests.get(test_url, timeout=10)
+        
+        if response.status_code == 200:
+            return {
+                "status": "success",
+                "message": "Weather API key is working",
+                "api_key_length": len(weather_api_key),
+                "test_location": "London"
+            }
+        elif response.status_code == 401:
+            return {
+                "status": "error",
+                "message": "Weather API key is invalid or expired",
+                "details": "Please check your OpenWeather API key"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Weather API returned status {response.status_code}",
+                "details": response.text
+            }
+            
+    except Exception as e:
+        logger.error(f"Error testing weather key: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error testing weather key: {str(e)}"
+        }
 
 @app.get("/simple-pick")
 async def get_simple_pick():
