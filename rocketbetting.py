@@ -1403,11 +1403,8 @@ def create_standardized_explanation(explanation: str, confidence: int, sport: st
     # Add confidence context
     confidence_context = f"Confidence: {get_confidence_label(confidence)} ({confidence}%)"
     
-    # Add risk assessment
-    risk_assessment = f"Risk Level: {get_risk_level(confidence)}"
-    
-    # Combine into standardized format
-    standardized_explanation = f"{confidence_context}\n{risk_assessment}\n\nAnalysis:\n{clean_explanation}"
+    # Combine into standardized format (removed risk level since it's already in the header)
+    standardized_explanation = f"{confidence_context}\n\nAnalysis:\n{clean_explanation}"
     
     return standardized_explanation
 
