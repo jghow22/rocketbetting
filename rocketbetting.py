@@ -1329,20 +1329,20 @@ def standardize_text(text: str) -> str:
     # Remove extra whitespace and normalize spacing
     text = re.sub(r'\s+', ' ', text.strip())
     
-    # Standardize common betting terms
-    text = re.sub(r'\b(win|wins|winning)\b', 'WIN', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(lose|loses|losing)\b', 'LOSE', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(beat|beats|beating)\b', 'BEAT', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(cover|covers|covering)\b', 'COVER', text, flags=re.IGNORECASE)
+    # Standardize common betting terms (keep them in proper case)
+    text = re.sub(r'\b(win|wins|winning)\b', 'win', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(lose|loses|losing)\b', 'lose', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(beat|beats|beating)\b', 'beat', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(cover|covers|covering)\b', 'cover', text, flags=re.IGNORECASE)
     
-    # Standardize confidence indicators
-    text = re.sub(r'\b(high|very high)\s+confidence\b', 'HIGH CONFIDENCE', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(medium|moderate)\s+confidence\b', 'MEDIUM CONFIDENCE', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(low)\s+confidence\b', 'LOW CONFIDENCE', text, flags=re.IGNORECASE)
+    # Standardize confidence indicators (keep them in proper case)
+    text = re.sub(r'\b(high|very high)\s+confidence\b', 'high confidence', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(medium|moderate)\s+confidence\b', 'medium confidence', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(low)\s+confidence\b', 'low confidence', text, flags=re.IGNORECASE)
     
-    # Standardize odds references
-    text = re.sub(r'\b(odds|line)\b', 'ODDS', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(value|valuable)\b', 'VALUE', text, flags=re.IGNORECASE)
+    # Standardize odds references (keep them in proper case)
+    text = re.sub(r'\b(odds|line)\b', 'odds', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(value|valuable)\b', 'value', text, flags=re.IGNORECASE)
     
     # Capitalize first letter of sentences
     text = '. '.join(sentence.capitalize() for sentence in text.split('. '))
@@ -1358,15 +1358,15 @@ def get_confidence_label(confidence: int) -> str:
         Standardized confidence label
     """
     if confidence >= 85:
-        return "VERY HIGH CONFIDENCE"
+        return "Very High"
     elif confidence >= 75:
-        return "HIGH CONFIDENCE"
+        return "High"
     elif confidence >= 65:
-        return "MEDIUM CONFIDENCE"
+        return "Medium"
     elif confidence >= 55:
-        return "LOW CONFIDENCE"
+        return "Low"
     else:
-        return "VERY LOW CONFIDENCE"
+        return "Very Low"
 
 def get_risk_level(confidence: int) -> str:
     """
@@ -1377,15 +1377,15 @@ def get_risk_level(confidence: int) -> str:
         Risk level string
     """
     if confidence >= 85:
-        return "LOW RISK"
+        return "Low Risk"
     elif confidence >= 75:
-        return "MEDIUM-LOW RISK"
+        return "Medium-Low Risk"
     elif confidence >= 65:
-        return "MEDIUM RISK"
+        return "Medium Risk"
     elif confidence >= 55:
-        return "MEDIUM-HIGH RISK"
+        return "Medium-High Risk"
     else:
-        return "HIGH RISK"
+        return "High Risk"
 
 def create_standardized_explanation(explanation: str, confidence: int, sport: str) -> str:
     """
@@ -1401,16 +1401,13 @@ def create_standardized_explanation(explanation: str, confidence: int, sport: st
     clean_explanation = standardize_text(explanation)
     
     # Add confidence context
-    confidence_context = f"CONFIDENCE LEVEL: {get_confidence_label(confidence)} ({confidence}%)"
+    confidence_context = f"Confidence: {get_confidence_label(confidence)} ({confidence}%)"
     
     # Add risk assessment
-    risk_assessment = f"RISK ASSESSMENT: {get_risk_level(confidence)}"
-    
-    # Add sport context
-    sport_context = f"SPORT: {sport.upper()}"
+    risk_assessment = f"Risk Level: {get_risk_level(confidence)}"
     
     # Combine into standardized format
-    standardized_explanation = f"{confidence_context}\n{risk_assessment}\n{sport_context}\n\nANALYSIS:\n{clean_explanation}"
+    standardized_explanation = f"{confidence_context}\n{risk_assessment}\n\nAnalysis:\n{clean_explanation}"
     
     return standardized_explanation
 
