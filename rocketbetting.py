@@ -1252,6 +1252,168 @@ def format_games_response(games_data: List[Dict[str, Any]]) -> List[Dict[str, An
     
     return formatted_games
 
+def standardize_betting_response(raw_response: Dict[str, Any], bet_type: str = "straight") -> Dict[str, Any]:
+    """
+    Standardize and normalize betting recommendation responses for consistency and clarity.
+    Args:
+        raw_response: Raw AI response dictionary
+        bet_type: Type of bet (straight, parlay, player_prop)
+    Returns:
+        Standardized response dictionary
+    """
+    try:
+        # Extract basic fields
+        recommendation = raw_response.get("recommendation", "")
+        explanation = raw_response.get("explanation", "")
+        confidence = raw_response.get("confidence", 75)
+        sport = raw_response.get("sport", "Unknown")
+        
+        # Normalize and clean the recommendation text
+        recommendation = standardize_text(recommendation)
+        explanation = standardize_text(explanation)
+        
+        # Create standardized format based on bet type
+        if bet_type == "straight":
+            standardized_recommendation = f"BET: {recommendation}"
+            confidence_label = get_confidence_label(confidence)
+            risk_level = get_risk_level(confidence)
+            
+        elif bet_type == "parlay":
+            standardized_recommendation = f"PARLAY: {recommendation}"
+            confidence_label = get_confidence_label(confidence)
+            risk_level = get_risk_level(confidence)
+            
+        elif bet_type == "player_prop":
+            standardized_recommendation = f"PLAYER PROP: {recommendation}"
+            confidence_label = get_confidence_label(confidence)
+            risk_level = get_risk_level(confidence)
+            
+        else:
+            standardized_recommendation = recommendation
+            confidence_label = get_confidence_label(confidence)
+            risk_level = get_risk_level(confidence)
+        
+        # Create standardized explanation
+        standardized_explanation = create_standardized_explanation(explanation, confidence, sport)
+        
+        return {
+            "recommendation": standardized_recommendation,
+            "explanation": standardized_explanation,
+            "confidence": confidence,
+            "confidence_label": confidence_label,
+            "risk_level": risk_level,
+            "sport": sport,
+            "bet_type": bet_type,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "formatted_time": datetime.now(timezone.utc).strftime("%B %d, %Y at %I:%M %p UTC")
+        }
+        
+    except Exception as e:
+        logger.error(f"Error standardizing betting response: {str(e)}")
+        return raw_response
+
+def standardize_text(text: str) -> str:
+    """
+    Normalize and standardize text using text normalization techniques.
+    Args:
+        text: Raw text to standardize
+    Returns:
+        Standardized text
+    """
+    if not text:
+        return ""
+    
+    # Convert to string if not already
+    text = str(text)
+    
+    # Remove extra whitespace and normalize spacing
+    text = re.sub(r'\s+', ' ', text.strip())
+    
+    # Standardize common betting terms
+    text = re.sub(r'\b(win|wins|winning)\b', 'WIN', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(lose|loses|losing)\b', 'LOSE', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(beat|beats|beating)\b', 'BEAT', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(cover|covers|covering)\b', 'COVER', text, flags=re.IGNORECASE)
+    
+    # Standardize confidence indicators
+    text = re.sub(r'\b(high|very high)\s+confidence\b', 'HIGH CONFIDENCE', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(medium|moderate)\s+confidence\b', 'MEDIUM CONFIDENCE', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(low)\s+confidence\b', 'LOW CONFIDENCE', text, flags=re.IGNORECASE)
+    
+    # Standardize odds references
+    text = re.sub(r'\b(odds|line)\b', 'ODDS', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(value|valuable)\b', 'VALUE', text, flags=re.IGNORECASE)
+    
+    # Capitalize first letter of sentences
+    text = '. '.join(sentence.capitalize() for sentence in text.split('. '))
+    
+    return text
+
+def get_confidence_label(confidence: int) -> str:
+    """
+    Convert confidence score to standardized label.
+    Args:
+        confidence: Confidence score (0-100)
+    Returns:
+        Standardized confidence label
+    """
+    if confidence >= 85:
+        return "VERY HIGH CONFIDENCE"
+    elif confidence >= 75:
+        return "HIGH CONFIDENCE"
+    elif confidence >= 65:
+        return "MEDIUM CONFIDENCE"
+    elif confidence >= 55:
+        return "LOW CONFIDENCE"
+    else:
+        return "VERY LOW CONFIDENCE"
+
+def get_risk_level(confidence: int) -> str:
+    """
+    Convert confidence score to risk level.
+    Args:
+        confidence: Confidence score (0-100)
+    Returns:
+        Risk level string
+    """
+    if confidence >= 85:
+        return "LOW RISK"
+    elif confidence >= 75:
+        return "MEDIUM-LOW RISK"
+    elif confidence >= 65:
+        return "MEDIUM RISK"
+    elif confidence >= 55:
+        return "MEDIUM-HIGH RISK"
+    else:
+        return "HIGH RISK"
+
+def create_standardized_explanation(explanation: str, confidence: int, sport: str) -> str:
+    """
+    Create a standardized explanation format.
+    Args:
+        explanation: Raw explanation text
+        confidence: Confidence score
+        sport: Sport name
+    Returns:
+        Standardized explanation
+    """
+    # Clean and standardize the explanation
+    clean_explanation = standardize_text(explanation)
+    
+    # Add confidence context
+    confidence_context = f"CONFIDENCE LEVEL: {get_confidence_label(confidence)} ({confidence}%)"
+    
+    # Add risk assessment
+    risk_assessment = f"RISK ASSESSMENT: {get_risk_level(confidence)}"
+    
+    # Add sport context
+    sport_context = f"SPORT: {sport.upper()}"
+    
+    # Combine into standardized format
+    standardized_explanation = f"{confidence_context}\n{risk_assessment}\n{sport_context}\n\nANALYSIS:\n{clean_explanation}"
+    
+    return standardized_explanation
+
 def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, str], Dict[str, Any]]:
     """
     Generate the best straight bet recommendation using enhanced AI analysis.
@@ -1334,13 +1496,17 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         
         confidence = rec_json.get('confidence', 75) # Default to 75% if not provided
         
-        result = {
+        # Create raw result
+        raw_result = {
             "recommendation": f"{rec_json['bet']}",
             "explanation": rec_json['explanation'],
             "confidence": confidence,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
         }
+        
+        # Standardize the response
+        result = standardize_betting_response(raw_result, "straight")
         
         # Store prediction in Google Sheets
         if sheets_manager:
@@ -1472,13 +1638,17 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         
         confidence = rec_json.get('confidence', 65) # Default to 65% for parlays
         
-        result = {
+        # Create raw result
+        raw_result = {
             "recommendation": f"{rec_json['parlay']}",
             "explanation": rec_json['explanation'],
             "confidence": confidence,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
         }
+        
+        # Standardize the response
+        result = standardize_betting_response(raw_result, "parlay")
         
         # Store prediction in Google Sheets
         if sheets_manager:
@@ -1619,13 +1789,17 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
                 # Fallback to a generic recommendation if all else fails
                 player_bet = "Player not specified - insufficient data for clear recommendation"
         
-        result = {
+        # Create raw result
+        raw_result = {
             "recommendation": player_bet,
             "explanation": rec_json.get('explanation', "No detailed explanation provided"),
             "confidence": confidence,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
         }
+        
+        # Standardize the response
+        result = standardize_betting_response(raw_result, "player_prop")
         
         # Store prediction in Google Sheets
         if sheets_manager:
