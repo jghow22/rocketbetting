@@ -512,6 +512,68 @@ SPORT_DISPLAY_NAMES: Dict[str, str] = {
     "TENNIS": "Tennis (ATP)"  # Added Tennis
 }
 
+# Define sport seasons (month ranges when sports are typically in season)
+SPORT_SEASONS: Dict[str, Dict[str, int]] = {
+    "NBA": {"start_month": 10, "end_month": 6},  # October to June
+    "NFL": {"start_month": 9, "end_month": 2},   # September to February
+    "CFB": {"start_month": 8, "end_month": 1},   # August to January
+    "MLS": {"start_month": 2, "end_month": 12},  # February to December (year-round with breaks)
+    "MLB": {"start_month": 3, "end_month": 11},  # March to November
+    "NHL": {"start_month": 10, "end_month": 6},  # October to June
+    "TENNIS": {"start_month": 1, "end_month": 12}  # Year-round (various tournaments)
+}
+
+def get_in_season_sports() -> List[str]:
+    """
+    Determine which sports are currently in season based on the current month.
+    
+    Returns:
+        List of sport codes that are currently in season
+    """
+    current_month = datetime.now().month
+    in_season_sports = []
+    
+    for sport, season in SPORT_SEASONS.items():
+        start_month = season["start_month"]
+        end_month = season["end_month"]
+        
+        # Handle seasons that span across year boundary
+        if start_month <= end_month:
+            # Normal season (e.g., March to November)
+            if start_month <= current_month <= end_month:
+                in_season_sports.append(sport)
+        else:
+            # Season spans year boundary (e.g., October to June)
+            if current_month >= start_month or current_month <= end_month:
+                in_season_sports.append(sport)
+    
+    logger.info(f"Sports currently in season (month {current_month}): {in_season_sports}")
+    return in_season_sports
+
+def get_primary_in_season_sport() -> str:
+    """
+    Get the primary sport that should be featured based on current season and popularity.
+    
+    Returns:
+        Sport code for the primary in-season sport
+    """
+    in_season_sports = get_in_season_sports()
+    
+    if not in_season_sports:
+        # Fallback to tennis if no major sports are in season
+        return "TENNIS"
+    
+    # Priority order for sports (when multiple are in season)
+    sport_priority = ["NBA", "NFL", "MLB", "NHL", "CFB", "MLS", "TENNIS"]
+    
+    for sport in sport_priority:
+        if sport in in_season_sports:
+            logger.info(f"Selected primary sport: {sport}")
+            return sport
+    
+    # If none of the priority sports are in season, return the first available
+    return in_season_sports[0]
+
 # Create caches (TTL in seconds)
 games_cache = TTLCache(maxsize=100, ttl=600) # Cache games for 10 minutes
 bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 minutes
@@ -2351,8 +2413,17 @@ async def get_best_pick(
         
         all_desc = []
         
-        # Try to fetch real data first
+        # Get sports that are currently in season
+        in_season_sports = get_in_season_sports()
+        logger.info(f"Fetching data for in-season sports: {in_season_sports}")
+        
+        # Try to fetch real data first, but only for in-season sports
         for sp, url in SPORTS_BASE_URLS.items():
+            # Skip sports that are not in season
+            if sp not in in_season_sports:
+                logger.info(f"Skipping {sp} - not in season")
+                continue
+                
             try:
                 if sp == "TENNIS":
                     # Generate tennis data with OpenAI since real data is problematic
@@ -2448,8 +2519,16 @@ async def get_best_parlay(
         
         all_desc = []
         
-        # Try to fetch real data first
+        # Get sports that are currently in season
+        in_season_sports = get_in_season_sports()
+        logger.info(f"Fetching data for in-season sports: {in_season_sports}")
+        
+        # Try to fetch real data first, but only for in-season sports
         for sp, url in SPORTS_BASE_URLS.items():
+            # Skip sports that are not in season
+            if sp not in in_season_sports:
+                logger.info(f"Skipping {sp} - not in season")
+                continue
             try:
                 if sp == "TENNIS":
                     # Generate tennis data with OpenAI since real data is problematic
@@ -2866,6 +2945,22 @@ async def get_available_sports():
         {"code": "Overall", "name": "All Sports"},
         *[{"code": code, "name": display} for code, display in SPORT_DISPLAY_NAMES.items()]
     ]
+
+@app.get("/in-season-sports")
+async def get_in_season_sports_endpoint():
+    """
+    Get list of sports that are currently in season.
+    Returns:
+        Dictionary with in-season sports and primary sport
+    """
+    in_season_sports = get_in_season_sports()
+    primary_sport = get_primary_in_season_sport()
+    
+    return {
+        "in_season_sports": in_season_sports,
+        "primary_sport": primary_sport,
+        "display_names": {sport: SPORT_DISPLAY_NAMES.get(sport, sport) for sport in in_season_sports}
+    }
 
 @app.get("/clear-cache")
 async def clear_cache():
