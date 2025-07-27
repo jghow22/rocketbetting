@@ -471,7 +471,13 @@ app = FastAPI(
 # CORS settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "*",  # Allow all origins for development
+        "https://www-redtapesoftwares-com.filesusr.com",  # Wix files domain
+        "https://www.redtapesoftwares.com",  # Main Wix domain
+        "https://*.wixsite.com",  # Wix subdomains
+        "https://*.filesusr.com",  # Wix files subdomains
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
