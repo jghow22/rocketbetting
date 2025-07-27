@@ -518,7 +518,7 @@ SPORT_SEASONS: Dict[str, Dict[str, int]] = {
     "NFL": {"start_month": 9, "end_month": 2},   # September to February
     "CFB": {"start_month": 8, "end_month": 1},   # August to January
     "MLS": {"start_month": 2, "end_month": 12},  # February to December (year-round with breaks)
-    "MLB": {"start_month": 4, "end_month": 10},  # April to October (regular season only)
+    "MLB": {"start_month": 3, "end_month": 11},  # March to November
     "NHL": {"start_month": 10, "end_month": 6},  # October to June
     "TENNIS": {"start_month": 1, "end_month": 12}  # Year-round (various tournaments)
 }
@@ -578,13 +578,6 @@ def get_primary_in_season_sport() -> str:
 games_cache = TTLCache(maxsize=100, ttl=600) # Cache games for 10 minutes
 bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 minutes
 
-@app.on_event("startup")
-async def startup_event():
-    """Clear caches on startup to ensure fresh data."""
-    games_cache.clear()
-    bets_cache.clear()
-    logger.info("Application started - caches cleared for fresh data")
-
 def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: bool = True) -> List[Dict[str, Any]]:
     """
     Filter games to only include current day and future events.
@@ -639,60 +632,6 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
     
     logger.info(f"Filtered {len(games_data)} games down to {len(filtered_games)} current/future games")
     return filtered_games
-
-def generate_mlb_fallback_games(count=5):
-    """
-    Generate fallback MLB games when the API doesn't return current games.
-    This is useful during Spring Training or when the API is unavailable.
-    """
-    mlb_teams = [
-        "New York Yankees", "Boston Red Sox", "Toronto Blue Jays", "Baltimore Orioles", "Tampa Bay Rays",
-        "Chicago White Sox", "Cleveland Guardians", "Detroit Tigers", "Kansas City Royals", "Minnesota Twins",
-        "Houston Astros", "Los Angeles Angels", "Oakland Athletics", "Seattle Mariners", "Texas Rangers",
-        "Atlanta Braves", "Miami Marlins", "New York Mets", "Philadelphia Phillies", "Washington Nationals",
-        "Chicago Cubs", "Cincinnati Reds", "Milwaukee Brewers", "Pittsburgh Pirates", "St. Louis Cardinals",
-        "Arizona Diamondbacks", "Colorado Rockies", "Los Angeles Dodgers", "San Diego Padres", "San Francisco Giants"
-    ]
-    
-    games = []
-    current_time = datetime.now(timezone.utc)
-    
-    for i in range(count):
-        # Randomly select teams
-        home_team = random.choice(mlb_teams)
-        away_team = random.choice([team for team in mlb_teams if team != home_team])
-        
-        # Create a future game time (within next 7 days)
-        game_time = current_time + timedelta(days=random.randint(1, 7), hours=random.randint(12, 22))
-        
-        # Generate realistic odds
-        home_odds = round(random.uniform(1.5, 3.5), 2)
-        away_odds = round(random.uniform(1.5, 3.5), 2)
-        
-        game = {
-            "id": f"mlb_fallback_{uuid.uuid4()}",
-            "sport": "MLB",
-            "home_team": home_team,
-            "away_team": away_team,
-            "commence_time": game_time.isoformat(),
-            "bookmakers": [
-                {
-                    "title": "Generated Odds",
-                    "markets": [
-                        {
-                            "key": "h2h",
-                            "outcomes": [
-                                {"name": home_team, "price": home_odds},
-                                {"name": away_team, "price": away_odds}
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }
-        games.append(game)
-    
-    return games
 
 def generate_current_day_tennis_predictions(match_type="straight", count=3):
     """
@@ -1102,17 +1041,11 @@ def fetch_odds(
     }
     
     try:
-        logger.info(f"Fetching odds from {base_url} with params: {params}")
         response = requests.get(base_url, params=params, timeout=10)
         response.raise_for_status()
-        data = response.json()
-        logger.info(f"Successfully fetched {len(data) if isinstance(data, list) else 'non-list'} items from {base_url}")
-        return data
+        return response.json()
     except requests.RequestException as e:
         logger.error(f"Request to {base_url} failed: {str(e)}")
-        return None
-    except ValueError as e:
-        logger.error(f"Failed to parse JSON response from {base_url}: {str(e)}")
         return None
 
 def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, Any]]:
@@ -1975,10 +1908,92 @@ def generate_best_player_bet_with_ai(player_descriptions: List[str]) -> Dict[str
 
 def update_random_outcomes(limit: int = 5):
     """
-    REMOVED: This function was for demo purposes only.
-    In production, outcomes should be tracked from real betting results.
+    Update a random selection of pending outcomes for demo purposes.
+    This would be replaced with actual outcome tracking in a production system.
+    Args:
+        limit: Maximum number of outcomes to update
+    Returns:
+        Count of updated outcomes
     """
-    return {"error": "Demo outcome updates are disabled in production"}
+    if not sheets_manager:
+        return {"error": "Google Sheets integration not available"}
+    
+    try:
+        # Get Predictions worksheet to find pending predictions
+        predictions_sheet = sheets_manager.get_sheet("Predictions")
+        if not predictions_sheet:
+            return {"error": "Could not access Predictions worksheet"}
+        
+        # Get all rows from the Predictions sheet
+        all_rows = predictions_sheet.get_all_values()
+        if len(all_rows) <= 1:
+            return {"message": "No predictions to update", "count": 0}
+        
+        # Extract header row and data rows
+        header = all_rows[0]
+        data_rows = all_rows[1:]
+        
+        # Find the column indexes for ID and outcome
+        id_col = header.index("ID") if "ID" in header else 0
+        outcome_col = header.index("Outcome") if "Outcome" in header else 7  # Default to 8th column
+        
+        # Find predictions with "Pending" outcome
+        pending_predictions = []
+        for i, row in enumerate(data_rows):
+            if i < len(data_rows) and len(row) > outcome_col and row[outcome_col] == "Pending":
+                pending_predictions.append({
+                    "index": i + 2,  # +2 because of 0-based index and header row
+                    "id": row[id_col],
+                    "row": row
+                })
+        
+        # If we don't have any pending predictions, return
+        if not pending_predictions:
+            return {"message": "No pending predictions to update", "count": 0}
+        
+        # Select predictions to update (limited by 'limit' parameter)
+        to_update = random.sample(pending_predictions, min(limit, len(pending_predictions)))
+        
+        # Possible outcomes
+        outcomes = ["Win", "Loss", "Push"]
+        outcome_weights = [0.45, 0.45, 0.1]  # 45% win, 45% loss, 10% push
+        
+        updated_count = 0
+        for pred in to_update:
+            try:
+                # Select a random outcome based on weights
+                outcome = random.choices(outcomes, weights=outcome_weights, k=1)[0]
+                
+                # Update the Predictions sheet
+                predictions_sheet.update_cell(pred["index"], outcome_col + 1, outcome)
+                
+                # Also record in Outcomes sheet
+                outcome_data = {
+                    "prediction_id": pred["id"],
+                    "outcome": outcome,
+                    "details": "Automated outcome update for demo",
+                    "actual_result": f"Simulated {outcome.lower()} for {pred['row'][2]} bet"  # Sport from column 3
+                }
+                sheets_manager.store_outcome(outcome_data)
+                
+                # Also update metrics
+                sheets_manager.update_metrics({
+                    "type": "prediction_outcome",
+                    "value": 1, 
+                    "sport": pred["row"][2],  # Sport from column 3
+                    "details": f"Outcome: {outcome} for {pred['row'][3]}"  # Recommendation from column 4
+                })
+                
+                updated_count += 1
+                logger.info(f"Updated outcome for prediction {pred['id']} to {outcome}")
+            except Exception as e:
+                logger.error(f"Error updating outcome for prediction {pred['id']}: {str(e)}")
+        
+        return {"message": f"Updated {updated_count} outcomes", "count": updated_count}
+    except Exception as e:
+        logger.error(f"Error in update_random_outcomes: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {"error": f"Error updating outcomes: {str(e)}"}
 
 @app.get("/dashboard-metrics")
 async def get_dashboard_metrics():
@@ -2326,17 +2341,14 @@ async def get_games(
             
             all_games.extend(tennis_data)
         else:
-            logger.info(f"Fetching odds for {sp} from {url}")
             data = fetch_odds(API_KEY, url)
             if data:
-                logger.info(f"Received {len(data)} games for {sp}")
                 # Add sport to each game
                 for game in data:
                     game["sport"] = sp
                 
                 # Filter for current day matches only
                 data = filter_games_by_date(data, current_day_only=True)
-                logger.info(f"After date filtering: {len(data)} games for {sp}")
                 
                 # Only store games that are actually displayed in the UI (limit to prevent rate limiting)
                 if sheets_manager and len(data) <= 20:  # Only store if we have a reasonable number of games
@@ -2349,16 +2361,6 @@ async def get_games(
                     logger.info(f"Skipping storage of {len(data)} games for {sp} to prevent rate limiting")
                 
                 all_games.extend(data)
-            else:
-                logger.warning(f"No data received for {sp} from {url}")
-                
-                # Fallback: Generate MLB games if no data is available
-                if sp == "MLB" and not data:
-                    logger.info("No MLB games available from API, generating fallback games")
-                    mlb_games = generate_mlb_fallback_games()
-                    if mlb_games:
-                        logger.info(f"Generated {len(mlb_games)} fallback MLB games")
-                        all_games.extend(mlb_games)
     
     formatted_data = format_games_response(all_games)
     games_cache[cache_key] = formatted_data
@@ -2450,27 +2452,21 @@ async def get_best_pick(
                 bets_cache[cache_key] = result
                 return {"best_pick": result}
         
-        # Production fallback: Only use OpenAI when no real odds data is available
-        logger.warning("No real odds data available, using OpenAI fallback for best pick")
-        
-        # Try to generate a realistic recommendation using OpenAI
-        try:
-            direct_recommendation = generate_tennis_recommendation_with_openai("straight")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("bet", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 75),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS",
-                    "success_source": "OpenAI Fallback (No Real Odds Available)"
-                }
-                bets_cache[cache_key] = result
-                return {"best_pick": result}
-        except Exception as e:
-            logger.error(f"OpenAI fallback failed: {str(e)}")
+        # Fallback to OpenAI if no data
+        logger.info("Using OpenAI fallback for best pick")
+        direct_recommendation = generate_tennis_recommendation_with_openai("straight")
+        if direct_recommendation:
+            result = {
+                "recommendation": direct_recommendation.get("bet", ""),
+                "explanation": direct_recommendation.get("explanation", ""),
+                "confidence": direct_recommendation.get("confidence", 75),
+                "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
+                "sport": "TENNIS"
+            }
+            bets_cache[cache_key] = result
+            return {"best_pick": result}
             
-        return {"error": "Unable to generate recommendation - service temporarily unavailable"}
+        return {"error": "Unable to generate recommendation"}
         
     except Exception as e:
         logger.error(f"Unhandled error in get_best_pick: {str(e)}")
@@ -2561,27 +2557,21 @@ async def get_best_parlay(
                 bets_cache[cache_key] = result
                 return {"best_parlay": result}
         
-        # Production fallback: Only use OpenAI when no real odds data is available
-        logger.warning("No real odds data available, using OpenAI fallback for best parlay")
-        
-        # Try to generate a realistic parlay recommendation using OpenAI
-        try:
-            direct_recommendation = generate_tennis_recommendation_with_openai("parlay")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("parlay", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 65),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS",
-                    "success_source": "OpenAI Fallback (No Real Odds Available)"
-                }
-                bets_cache[cache_key] = result
-                return {"best_parlay": result}
-        except Exception as e:
-            logger.error(f"OpenAI fallback failed: {str(e)}")
+        # Fallback to OpenAI if no data
+        logger.info("Using OpenAI fallback for best parlay")
+        direct_recommendation = generate_tennis_recommendation_with_openai("parlay")
+        if direct_recommendation:
+            result = {
+                "recommendation": direct_recommendation.get("parlay", ""),
+                "explanation": direct_recommendation.get("explanation", ""),
+                "confidence": direct_recommendation.get("confidence", 65),
+                "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
+                "sport": "TENNIS"
+            }
+            bets_cache[cache_key] = result
+            return {"best_parlay": result}
             
-        return {"error": "Unable to generate recommendation - service temporarily unavailable"}
+        return {"error": "Unable to generate recommendation"}
         
     except Exception as e:
         logger.error(f"Unhandled error in get_best_parlay: {str(e)}")
@@ -2981,7 +2971,6 @@ async def clear_cache():
     """
     games_cache.clear()
     bets_cache.clear()
-    logger.info("Cache cleared successfully. Next requests will fetch fresh data.")
     return {"message": "Cache cleared successfully. Next requests will fetch fresh data."}
 
 @app.post("/record-outcome")
@@ -3066,10 +3055,13 @@ async def update_metrics(
 @app.get("/update-demo-outcomes")
 async def update_demo_outcomes(limit: int = Query(5, ge=1, le=20)):
     """
-    REMOVED: This endpoint was for demo purposes only.
-    In production, outcomes should be tracked from real betting results.
+    Update a random selection of pending outcomes for demo purposes.
+    Args:
+        limit: Maximum number of outcomes to update
+    Returns:
+        Count of updated outcomes
     """
-    raise HTTPException(status_code=404, detail="Demo endpoints are disabled in production")
+    return update_random_outcomes(limit)
 
 @app.get("/")
 def read_root():
@@ -3179,17 +3171,80 @@ async def track_interaction(
 # Add a test endpoint for Google Sheets
 @app.get("/test-sheets-connection")
 async def test_sheets_connection():
-    """
-    REMOVED: This endpoint was for testing purposes only.
-    """
-    raise HTTPException(status_code=404, detail="Test endpoints are disabled in production")
+    """Simple test endpoint to verify Google Sheets connection"""
+    if not sheets_manager or not sheets_manager.client:
+        return {
+            "status": "error",
+            "message": "No active Google Sheets connection",
+            "spreadsheet_id": os.getenv("SPREADSHEET_ID"),
+            "has_credentials_json": bool(os.getenv("GOOGLE_CREDENTIALS_JSON")),
+            "has_credentials_path": bool(os.getenv("GOOGLE_CREDENTIALS_PATH"))
+        }
+    
+    try:
+        # Test spreadsheet access
+        spreadsheet = sheets_manager.client.open_by_key(sheets_manager.spreadsheet_id)
+        worksheet_names = [ws.title for ws in spreadsheet.worksheets()]
+        
+        # Try to write to a worksheet
+        test_sheet = sheets_manager.get_sheet("Predictions")
+        if test_sheet:
+            row = ["TEST", "Connection Test", datetime.now().isoformat()]
+            test_sheet.append_row(row)
+            message = "Successfully connected to Google Sheets and wrote test data"
+        else:
+            message = "Connected to Google Sheets but couldn't access the Predictions worksheet"
+        
+        return {
+            "status": "success",
+            "message": message,
+            "worksheets": worksheet_names
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error testing connection: {str(e)}",
+            "error_details": traceback.format_exc()
+        }
 
 @app.get("/test-all-sheets")
 async def test_all_sheets():
-    """
-    REMOVED: This endpoint was for testing purposes only.
-    """
-    raise HTTPException(status_code=404, detail="Test endpoints are disabled in production")
+    """Test access to all Google Sheets tabs"""
+    if not sheets_manager:
+        return {"status": "error", "message": "Google Sheets integration not available"}
+    
+    sheet_names = ["Games", "Predictions", "Player Props Sheet", "Outcomes", "Metrics", "User Interactions Sheet"]
+    results = {}
+    
+    for sheet_name in sheet_names:
+        try:
+            worksheet = sheets_manager.get_sheet(sheet_name)
+            if worksheet:
+                # Try to get the first row to verify read access
+                header_row = worksheet.row_values(1)
+                results[sheet_name] = {
+                    "status": "success",
+                    "message": f"Successfully accessed {sheet_name}",
+                    "header": header_row
+                }
+            else:
+                results[sheet_name] = {
+                    "status": "error", 
+                    "message": f"Could not access {sheet_name}"
+                }
+        except Exception as e:
+            results[sheet_name] = {
+                "status": "error",
+                "message": f"Error accessing {sheet_name}: {str(e)}"
+            }
+    
+    # Overall status
+    all_success = all(result["status"] == "success" for result in results.values())
+    
+    return {
+        "overall_status": "success" if all_success else "error",
+        "sheets": results
+    }
 
 @app.get("/verify-sheets")
 async def verify_sheets():
@@ -3370,10 +3425,66 @@ async def verify_sheets():
 # Add new testing endpoints for troubleshooting
 @app.get("/test-prediction-api")
 async def test_prediction_api():
-    """
-    REMOVED: This endpoint was for testing purposes only.
-    """
-    raise HTTPException(status_code=404, detail="Test endpoints are disabled in production")
+    """Test endpoint to check if AI prediction is working"""
+    try:
+        # Verify API keys are set
+        api_keys_status = {
+            "ODDS_API_KEY": bool(API_KEY),
+            "OPENAI_API_KEY": bool(OPENAI_API_KEY),
+            "THESPORTSDB_API_KEY": bool(THESPORTSDB_API_KEY)
+        }
+        
+        # Test OpenAI connection
+        openai_status = "Not tested"
+        if OPENAI_API_KEY:
+            try:
+                client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    temperature=0,
+                    max_tokens=50,
+                    messages=[
+                        {"role": "system", "content": "You are a test assistant."},
+                        {"role": "user", "content": "Return the text 'OpenAI API is working'"}
+                    ]
+                )
+                openai_status = response.choices[0].message.content
+            except Exception as e:
+                openai_status = f"Error: {str(e)}"
+        
+        # Test odds API
+        odds_status = "Not tested"
+        if API_KEY:
+            try:
+                # Use NBA as a test sport
+                test_url = SPORTS_BASE_URLS.get("NBA")
+                if test_url:
+                    data = fetch_odds(API_KEY, test_url)
+                    odds_status = f"Success - found {len(data)} games" if data else "No games found"
+                else:
+                    odds_status = "No test URL found"
+            except Exception as e:
+                odds_status = f"Error: {str(e)}"
+        
+        # Test recommendation generation with minimal input
+        ai_rec_status = "Not tested"
+        try:
+            test_desc = ["NBA: Test Home Team vs Test Away Team | Odds: 1.5, 2.5"]
+            result = generate_best_pick_with_ai(test_desc)
+            ai_rec_status = "Success" if result and not result.get("error") else f"Error: {result.get('error', 'Unknown error')}"
+        except Exception as e:
+            ai_rec_status = f"Error: {str(e)}"
+        
+        return {
+            "api_keys": api_keys_status,
+            "openai_test": openai_status,
+            "odds_api_test": odds_status,
+            "ai_recommendation_test": ai_rec_status
+        }
+    except Exception as e:
+        logger.error(f"Error in test endpoint: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {"error": f"Test failed: {str(e)}"}
 
 @app.get("/weather")
 async def get_weather(
@@ -3439,30 +3550,68 @@ async def get_weather(
 @app.get("/test-weather-key")
 async def test_weather_key():
     """
-    REMOVED: This endpoint was for testing purposes only.
+    Test if the OpenWeather API key is configured and working
     """
-    raise HTTPException(status_code=404, detail="Test endpoints are disabled in production")
+    try:
+        weather_api_key = os.getenv('OPENWEATHER_API_KEY')
+        
+        if not weather_api_key:
+            return {
+                "status": "error",
+                "message": "Weather API key not configured",
+                "details": "Please add OPENWEATHER_API_KEY to your environment variables"
+            }
+        
+        # Test with a simple location - use a more reliable format
+        test_url = f"https://api.openweathermap.org/data/2.5/forecast?q=London,UK&appid={weather_api_key}&units=imperial"
+        
+        logger.info(f"Testing weather API key with URL: {test_url.replace(weather_api_key, '***')}")
+        
+        response = requests.get(test_url, timeout=10)
+        
+        if response.status_code == 200:
+            return {
+                "status": "success",
+                "message": "Weather API key is working",
+                "api_key_length": len(weather_api_key),
+                "test_location": "London"
+            }
+        elif response.status_code == 401:
+            return {
+                "status": "error",
+                "message": "Weather API key is invalid or expired",
+                "details": "Please check your OpenWeather API key"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Weather API returned status {response.status_code}",
+                "details": response.text
+            }
+            
+    except Exception as e:
+        logger.error(f"Error testing weather key: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error testing weather key: {str(e)}"
+        }
 
 @app.get("/simple-pick")
 async def get_simple_pick():
     """
-    REMOVED: This endpoint was for testing purposes only.
-    Use /best-pick for real recommendations.
+    Get a simple hardcoded pick for testing frontend integration.
+    Returns:
+        Dictionary with a test recommendation
     """
-    raise HTTPException(status_code=404, detail="Test endpoints are disabled in production")
-
-@app.get("/test-mlb-fallback")
-async def test_mlb_fallback():
-    """Test the MLB fallback game generation."""
-    try:
-        mlb_games = generate_mlb_fallback_games(3)
-        return {
-            "message": f"Generated {len(mlb_games)} MLB fallback games",
-            "games": mlb_games
-        }
-    except Exception as e:
-        logger.error(f"Error testing MLB fallback: {str(e)}")
-        return {"error": f"Failed to generate MLB fallback games: {str(e)}"}
+    test_pick = {
+        "recommendation": "Test Team to win",
+        "explanation": "This is a test recommendation to verify frontend-backend integration.",
+        "confidence": 75,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+        "sport": "TEST"
+    }
+    
+    return {"best_pick": test_pick}
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
