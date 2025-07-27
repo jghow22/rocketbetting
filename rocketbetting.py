@@ -668,7 +668,7 @@ def generate_current_day_tennis_predictions(match_type="straight", count=3):
         5. Include a realistic time for today (between 10:00 and 22:00 UTC)
         
         Format each match exactly like this example:
-        TENNIS: Novak Djokovic vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, today
+        TENNIS: Jannik Sinner vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Sinner: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Wimbledon 2025 | Context: Tennis match, today
         """
     elif match_type == "parlay":
         prompt = f"""
@@ -778,7 +778,7 @@ def generate_tennis_predictions_with_openai(match_type="straight", count=3):
         5. Include a realistic time for today (between 10:00 and 22:00 UTC)
         
         Format each match exactly like this example:
-        TENNIS: Novak Djokovic vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Djokovic: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Tournament Name | Context: Tennis match, today
+        TENNIS: Jannik Sinner vs Carlos Alcaraz on {current_date} at 14:00 UTC | Odds: Sinner: 1.85 (54.1% implied), Alcaraz: 2.10 (47.6% implied) | Source: Wimbledon 2025 | Context: Tennis match, today
         """
     elif match_type == "parlay":
         prompt = f"""
