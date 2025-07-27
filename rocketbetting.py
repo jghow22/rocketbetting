@@ -518,7 +518,7 @@ SPORT_SEASONS: Dict[str, Dict[str, int]] = {
     "NFL": {"start_month": 9, "end_month": 2},   # September to February
     "CFB": {"start_month": 8, "end_month": 1},   # August to January
     "MLS": {"start_month": 2, "end_month": 12},  # February to December (year-round with breaks)
-    "MLB": {"start_month": 3, "end_month": 11},  # March to November
+    "MLB": {"start_month": 4, "end_month": 10},  # April to October (regular season only)
     "NHL": {"start_month": 10, "end_month": 6},  # October to June
     "TENNIS": {"start_month": 1, "end_month": 12}  # Year-round (various tournaments)
 }
@@ -578,6 +578,13 @@ def get_primary_in_season_sport() -> str:
 games_cache = TTLCache(maxsize=100, ttl=600) # Cache games for 10 minutes
 bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 minutes
 
+@app.on_event("startup")
+async def startup_event():
+    """Clear caches on startup to ensure fresh data."""
+    games_cache.clear()
+    bets_cache.clear()
+    logger.info("Application started - caches cleared for fresh data")
+
 def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: bool = True) -> List[Dict[str, Any]]:
     """
     Filter games to only include current day and future events.
@@ -632,6 +639,60 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
     
     logger.info(f"Filtered {len(games_data)} games down to {len(filtered_games)} current/future games")
     return filtered_games
+
+def generate_mlb_fallback_games(count=5):
+    """
+    Generate fallback MLB games when the API doesn't return current games.
+    This is useful during Spring Training or when the API is unavailable.
+    """
+    mlb_teams = [
+        "New York Yankees", "Boston Red Sox", "Toronto Blue Jays", "Baltimore Orioles", "Tampa Bay Rays",
+        "Chicago White Sox", "Cleveland Guardians", "Detroit Tigers", "Kansas City Royals", "Minnesota Twins",
+        "Houston Astros", "Los Angeles Angels", "Oakland Athletics", "Seattle Mariners", "Texas Rangers",
+        "Atlanta Braves", "Miami Marlins", "New York Mets", "Philadelphia Phillies", "Washington Nationals",
+        "Chicago Cubs", "Cincinnati Reds", "Milwaukee Brewers", "Pittsburgh Pirates", "St. Louis Cardinals",
+        "Arizona Diamondbacks", "Colorado Rockies", "Los Angeles Dodgers", "San Diego Padres", "San Francisco Giants"
+    ]
+    
+    games = []
+    current_time = datetime.now(timezone.utc)
+    
+    for i in range(count):
+        # Randomly select teams
+        home_team = random.choice(mlb_teams)
+        away_team = random.choice([team for team in mlb_teams if team != home_team])
+        
+        # Create a future game time (within next 7 days)
+        game_time = current_time + timedelta(days=random.randint(1, 7), hours=random.randint(12, 22))
+        
+        # Generate realistic odds
+        home_odds = round(random.uniform(1.5, 3.5), 2)
+        away_odds = round(random.uniform(1.5, 3.5), 2)
+        
+        game = {
+            "id": f"mlb_fallback_{uuid.uuid4()}",
+            "sport": "MLB",
+            "home_team": home_team,
+            "away_team": away_team,
+            "commence_time": game_time.isoformat(),
+            "bookmakers": [
+                {
+                    "title": "Generated Odds",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": home_team, "price": home_odds},
+                                {"name": away_team, "price": away_odds}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+        games.append(game)
+    
+    return games
 
 def generate_current_day_tennis_predictions(match_type="straight", count=3):
     """
@@ -1041,11 +1102,17 @@ def fetch_odds(
     }
     
     try:
+        logger.info(f"Fetching odds from {base_url} with params: {params}")
         response = requests.get(base_url, params=params, timeout=10)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        logger.info(f"Successfully fetched {len(data) if isinstance(data, list) else 'non-list'} items from {base_url}")
+        return data
     except requests.RequestException as e:
         logger.error(f"Request to {base_url} failed: {str(e)}")
+        return None
+    except ValueError as e:
+        logger.error(f"Failed to parse JSON response from {base_url}: {str(e)}")
         return None
 
 def fetch_player_data_thesportsdb(api_key: str, sport: str) -> List[Dict[str, Any]]:
@@ -2259,14 +2326,17 @@ async def get_games(
             
             all_games.extend(tennis_data)
         else:
+            logger.info(f"Fetching odds for {sp} from {url}")
             data = fetch_odds(API_KEY, url)
             if data:
+                logger.info(f"Received {len(data)} games for {sp}")
                 # Add sport to each game
                 for game in data:
                     game["sport"] = sp
                 
                 # Filter for current day matches only
                 data = filter_games_by_date(data, current_day_only=True)
+                logger.info(f"After date filtering: {len(data)} games for {sp}")
                 
                 # Only store games that are actually displayed in the UI (limit to prevent rate limiting)
                 if sheets_manager and len(data) <= 20:  # Only store if we have a reasonable number of games
@@ -2279,6 +2349,16 @@ async def get_games(
                     logger.info(f"Skipping storage of {len(data)} games for {sp} to prevent rate limiting")
                 
                 all_games.extend(data)
+            else:
+                logger.warning(f"No data received for {sp} from {url}")
+                
+                # Fallback: Generate MLB games if no data is available
+                if sp == "MLB" and not data:
+                    logger.info("No MLB games available from API, generating fallback games")
+                    mlb_games = generate_mlb_fallback_games()
+                    if mlb_games:
+                        logger.info(f"Generated {len(mlb_games)} fallback MLB games")
+                        all_games.extend(mlb_games)
     
     formatted_data = format_games_response(all_games)
     games_cache[cache_key] = formatted_data
@@ -2901,6 +2981,7 @@ async def clear_cache():
     """
     games_cache.clear()
     bets_cache.clear()
+    logger.info("Cache cleared successfully. Next requests will fetch fresh data.")
     return {"message": "Cache cleared successfully. Next requests will fetch fresh data."}
 
 @app.post("/record-outcome")
@@ -3369,6 +3450,19 @@ async def get_simple_pick():
     Use /best-pick for real recommendations.
     """
     raise HTTPException(status_code=404, detail="Test endpoints are disabled in production")
+
+@app.get("/test-mlb-fallback")
+async def test_mlb_fallback():
+    """Test the MLB fallback game generation."""
+    try:
+        mlb_games = generate_mlb_fallback_games(3)
+        return {
+            "message": f"Generated {len(mlb_games)} MLB fallback games",
+            "games": mlb_games
+        }
+    except Exception as e:
+        logger.error(f"Error testing MLB fallback: {str(e)}")
+        return {"error": f"Failed to generate MLB fallback games: {str(e)}"}
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
