@@ -472,17 +472,18 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://www-redtapesoftwares-com.filesusr.com",  # Wix files domain
-        "https://www-redtapesoftwares.com",  # Main Wix domain
-        "https://www-redtapesoftwares-com.filesusr.com",  # Exact match
-        "https://www-redtapesoftwares.com",  # Exact match
-        "https://redtapesoftwares.wixsite.com",  # Wix subdomain
-        "https://*.wixsite.com",  # Wix subdomains
-        "https://*.filesusr.com",  # Wix files subdomains
-        "http://localhost:3000",  # Local development
-        "http://localhost:8080",  # Local development
-        "http://127.0.0.1:3000",  # Local development
-        "http://127.0.0.1:8080",  # Local development
+        "https://www-redtapesoftwares-com.filesusr.com",
+        "https://www-redtapesoftwares.com",
+        "https://redtapesoftwares.wixsite.com",
+        "https://redtapesoftwares.wixsite.com",
+        "https://www.redtapesoftwares.wixsite.com",
+        "https://redtapesoftwares-com.filesusr.com",
+        "https://www.redtapesoftwares-com.filesusr.com",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8080",
+        "*"  # Temporary for debugging - remove in production
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -2084,8 +2085,8 @@ async def get_games(
                         game["sport"] = "TENNIS"
                     data.extend(tennis_data)
             
-            # Filter for current day matches only
-            data = filter_games_by_date(data, current_day_only=True)
+            # Filter for current and upcoming matches (less restrictive)
+            data = filter_games_by_date(data, current_day_only=False)
             
             # If no current day real matches, use OpenAI to generate data
             if not data:
@@ -2198,8 +2199,8 @@ async def get_games(
                         game["sport"] = "TENNIS"
                     tennis_data.extend(endpoint_data)
             
-            # Filter for current day tennis matches only
-            tennis_data = filter_games_by_date(tennis_data, current_day_only=True)
+            # Filter for current and upcoming tennis matches (less restrictive)
+            tennis_data = filter_games_by_date(tennis_data, current_day_only=False)
             
             # If no current day real matches, use OpenAI to generate data
             if not tennis_data:
@@ -2283,8 +2284,8 @@ async def get_games(
                 for game in data:
                     game["sport"] = sp
                 
-                # Filter for current day matches only
-                data = filter_games_by_date(data, current_day_only=True)
+                # Filter for current and upcoming matches (less restrictive)
+                data = filter_games_by_date(data, current_day_only=False)
                 
                 # Only store games that are actually displayed in the UI (limit to prevent rate limiting)
                 if sheets_manager and len(data) <= 20:  # Only store if we have a reasonable number of games
