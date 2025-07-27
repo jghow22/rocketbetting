@@ -468,28 +468,35 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS settings
+# CORS settings - Enhanced for Wix compatibility
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://www-redtapesoftwares-com.filesusr.com",
         "https://www-redtapesoftwares.com",
         "https://redtapesoftwares.wixsite.com",
-        "https://redtapesoftwares.wixsite.com",
         "https://www.redtapesoftwares.wixsite.com",
         "https://redtapesoftwares-com.filesusr.com",
-        "https://www.redtapesoftwares-com.filesusr.com",
+        "https://www-redtapesoftwares-com.filesusr.com",
+        "https://www.wix.com",
+        "https://www.wixsite.com",
         "http://localhost:3000",
         "http://localhost:8080",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8080",
-        "*"  # Temporary for debugging - remove in production
+        "*"  # Keep wildcard for debugging - will be removed in production
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["*", "Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+    expose_headers=["*", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"],
 )
+
+# Add CORS preflight handler
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """Handle CORS preflight requests for all endpoints"""
+    return {"message": "CORS preflight handled"}
 
 # Get API keys from environment
 API_KEY = os.getenv("ODDS_API_KEY")
@@ -3598,6 +3605,20 @@ async def get_simple_pick():
     }
     
     return {"best_pick": test_pick}
+
+@app.get("/test-cors")
+async def test_cors():
+    """
+    Test endpoint specifically for CORS debugging.
+    Returns:
+        CORS test response with headers
+    """
+    return {
+        "message": "CORS test endpoint working!",
+        "timestamp": datetime.now().isoformat(),
+        "origin": "test-cors-endpoint",
+        "status": "success"
+    }
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
