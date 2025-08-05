@@ -602,11 +602,11 @@ bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 
 
 def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: bool = True) -> List[Dict[str, Any]]:
     """
-    Filter games to only include current day and future events.
+    Filter games to only include current day and very near future events.
     
     Args:
         games_data: List of game data from API
-        current_day_only: If True, only include games from today. If False, include today and future.
+        current_day_only: If True, only include games from today. If False, include today and next 3 days max.
     
     Returns:
         Filtered list of games
@@ -617,12 +617,14 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
     current_time = datetime.now(timezone.utc)
     current_date = current_time.date()
     
-    # For current day only, we want games that start within the next 24 hours from now
+    # For current day only, we want games that start within the next 12 hours from now
     if current_day_only:
-        tomorrow = current_date + timedelta(days=1)
-        cutoff_time = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=timezone.utc)
+        # Only include games starting within the next 12 hours
+        max_future_time = current_time + timedelta(hours=12)
+        cutoff_time = current_time - timedelta(minutes=30)  # 30 minute buffer for games that just started
     else:
-        # For future games, just exclude past games - but add a small buffer to avoid edge cases
+        # For future games, limit to next 3 days maximum to avoid far-future games
+        max_future_time = current_time + timedelta(days=3)
         cutoff_time = current_time - timedelta(minutes=30)  # 30 minute buffer for games that just started
     
     filtered_games = []
@@ -645,26 +647,33 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
             
             game_time = datetime.fromisoformat(game_time_str)
             
-            # Check if game is in the future relative to our cutoff
-            if game_time >= cutoff_time:
+            # Check if game is within our time window (not too far in the past or future)
+            if cutoff_time <= game_time <= max_future_time:
                 # Additional validation: ensure the game has valid team names
                 home_team = game.get('home_team', '').strip()
                 away_team = game.get('away_team', '').strip()
                 
                 if home_team and away_team and home_team != 'TBD' and away_team != 'TBD':
                     filtered_games.append(game)
-                    logger.info(f"Including future game: {home_team} vs {away_team} at {game_time}")
+                    time_until_game = game_time - current_time
+                    hours_until_game = time_until_game.total_seconds() / 3600
+                    logger.info(f"Including game: {home_team} vs {away_team} at {game_time} ({hours_until_game:.1f} hours from now)")
                 else:
                     logger.warning(f"Excluding game with invalid teams: {home_team} vs {away_team}")
             else:
-                logger.info(f"Excluding past game: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')} at {game_time}")
+                time_until_game = game_time - current_time
+                hours_until_game = time_until_game.total_seconds() / 3600
+                if game_time < cutoff_time:
+                    logger.info(f"Excluding past game: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')} at {game_time} ({hours_until_game:.1f} hours ago)")
+                else:
+                    logger.info(f"Excluding far-future game: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')} at {game_time} ({hours_until_game:.1f} hours from now)")
                 
         except Exception as e:
             logger.error(f"Error parsing game time for {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')}: {str(e)}")
             # For safety, exclude games with unparseable times
             continue
     
-    logger.info(f"Filtered {len(games_data)} games down to {len(filtered_games)} current/future games")
+    logger.info(f"Filtered {len(games_data)} games down to {len(filtered_games)} games within time window")
     return filtered_games
 
 def generate_current_day_tennis_predictions(match_type="straight", count=3):
@@ -2483,13 +2492,39 @@ async def get_best_pick(
                         # Try current day first, then expand to upcoming games if needed
                         filtered_data = filter_games_by_date(data, current_day_only=True)
                         if not filtered_data:
-                            # If no current day games, try upcoming games
+                            # If no current day games, try upcoming games (but still limited to 3 days)
                             filtered_data = filter_games_by_date(data, current_day_only=False)
                             logger.info(f"No current day games for {sp}, using upcoming games: {len(filtered_data)} found")
                         
                         if filtered_data:
-                            all_desc.extend(format_odds_for_ai(filtered_data, sp))
-                            logger.info(f"Added {len(filtered_data)} games for {sp}")
+                            # Only include games that are actually happening soon
+                            soon_games = []
+                            current_time = datetime.now(timezone.utc)
+                            for game in filtered_data:
+                                try:
+                                    game_time_str = game.get("commence_time", "")
+                                    if game_time_str.endswith('Z'):
+                                        game_time_str = game_time_str[:-1] + '+00:00'
+                                    elif '+' not in game_time_str and 'T' in game_time_str:
+                                        game_time_str = game_time_str + '+00:00'
+                                    
+                                    game_time = datetime.fromisoformat(game_time_str)
+                                    time_until_game = game_time - current_time
+                                    hours_until_game = time_until_game.total_seconds() / 3600
+                                    
+                                    # Only include games happening within the next 48 hours
+                                    if 0 <= hours_until_game <= 48:
+                                        soon_games.append(game)
+                                        logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
+                                except Exception as e:
+                                    logger.warning(f"Error processing game time for {sp}: {str(e)}")
+                                    continue
+                            
+                            if soon_games:
+                                all_desc.extend(format_odds_for_ai(soon_games, sp))
+                                logger.info(f"Added {len(soon_games)} soon games for {sp}")
+                            else:
+                                logger.warning(f"No soon games found for {sp}")
                         else:
                             logger.warning(f"No valid games found for {sp}")
             except Exception as e:
@@ -2604,11 +2639,38 @@ async def get_best_parlay(
                         for game in data:
                             game["sport"] = sp
                         
-                        # Filter for current day matches only
+                                                        # Filter for current day matches only, then apply additional time restrictions
                         data = filter_games_by_date(data, current_day_only=True)
                         
                         if data:
-                            all_desc.extend(format_odds_for_ai(data, sp))
+                            # Only include games that are actually happening soon
+                            soon_games = []
+                            current_time = datetime.now(timezone.utc)
+                            for game in data:
+                                try:
+                                    game_time_str = game.get("commence_time", "")
+                                    if game_time_str.endswith('Z'):
+                                        game_time_str = game_time_str[:-1] + '+00:00'
+                                    elif '+' not in game_time_str and 'T' in game_time_str:
+                                        game_time_str = game_time_str + '+00:00'
+                                    
+                                    game_time = datetime.fromisoformat(game_time_str)
+                                    time_until_game = game_time - current_time
+                                    hours_until_game = time_until_game.total_seconds() / 3600
+                                    
+                                    # Only include games happening within the next 24 hours
+                                    if 0 <= hours_until_game <= 24:
+                                        soon_games.append(game)
+                                        logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
+                                except Exception as e:
+                                    logger.warning(f"Error processing game time for {sp}: {str(e)}")
+                                    continue
+                            
+                            if soon_games:
+                                all_desc.extend(format_odds_for_ai(soon_games, sp))
+                                logger.info(f"Added {len(soon_games)} soon games for {sp}")
+                            else:
+                                logger.warning(f"No soon games found for {sp}")
             except Exception as e:
                 logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         
