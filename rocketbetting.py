@@ -14,6 +14,7 @@ import uuid
 import traceback
 from functools import lru_cache
 import random
+import math
 # Google Sheets Integration
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -2016,7 +2017,12 @@ async def get_dashboard_metrics():
         predictions_sheet = sheets_manager.get_sheet("Predictions")
         if not predictions_sheet:
             logger.error("Could not access Predictions worksheet")
-            return {"error": "Could not access prediction data"}
+            return {
+                "total_predictions": 0,
+                "high_confidence_picks": 0,
+                "average_confidence": 0,
+                "sport_breakdown": []
+            }
         
         # Get all rows from Predictions sheet
         all_rows = predictions_sheet.get_all_values()
@@ -2032,42 +2038,64 @@ async def get_dashboard_metrics():
         header = all_rows[0]
         data_rows = all_rows[1:]
         
-        # Find column indexes
-        sport_col = header.index("Sport") if "Sport" in header else 2  # Default to 3rd column
-        confidence_col = header.index("Confidence") if "Confidence" in header else 4  # Default to 5th column
-        outcome_col = header.index("Outcome") if "Outcome" in header else 7  # Default to 8th column
+        # Find column indexes with better error handling
+        try:
+            sport_col = header.index("Sport") if "Sport" in header else 2
+            confidence_col = header.index("Confidence") if "Confidence" in header else 4
+            outcome_col = header.index("Outcome") if "Outcome" in header else 7
+        except (ValueError, IndexError):
+            # Fallback to default columns if header parsing fails
+            sport_col = 2
+            confidence_col = 4
+            outcome_col = 7
         
-        # Calculate metrics
+        # Calculate metrics with robust error handling
         total_predictions = len(data_rows)
         high_confidence_count = 0
         confidence_sum = 0
+        valid_confidence_count = 0
         sport_counts = {}
         
         for row in data_rows:
-            # Count high confidence predictions (>75%)
+            # Count high confidence predictions (>75%) with better error handling
             try:
-                confidence = float(row[confidence_col]) if row[confidence_col] and row[confidence_col] != "Confidence" else 0
-                confidence_sum += confidence
-                if confidence >= 75:
-                    high_confidence_count += 1
-            except (ValueError, IndexError):
+                if len(row) > confidence_col and row[confidence_col]:
+                    confidence_str = str(row[confidence_col]).strip()
+                    if confidence_str and confidence_str.lower() not in ['confidence', 'n/a', 'nan', '']:
+                        confidence = float(confidence_str)
+                        if not math.isnan(confidence) and confidence >= 0:
+                            confidence_sum += confidence
+                            valid_confidence_count += 1
+                            if confidence >= 75:
+                                high_confidence_count += 1
+            except (ValueError, IndexError, TypeError):
                 pass
             
-            # Count by sport
+            # Count by sport with better error handling
             try:
-                sport = row[sport_col] if len(row) > sport_col else "Unknown"
-                if sport in sport_counts:
-                    sport_counts[sport] += 1
-                else:
-                    sport_counts[sport] = 1
-            except IndexError:
+                if len(row) > sport_col and row[sport_col]:
+                    sport = str(row[sport_col]).strip()
+                    if sport and sport.lower() not in ['sport', 'n/a', 'nan', '']:
+                        if sport in sport_counts:
+                            sport_counts[sport] += 1
+                        else:
+                            sport_counts[sport] = 1
+            except (IndexError, TypeError):
                 pass
         
-        # Calculate average confidence
-        avg_confidence = round(confidence_sum / total_predictions, 1) if total_predictions > 0 else 0
+        # Calculate average confidence with robust error handling
+        if valid_confidence_count > 0:
+            avg_confidence = round(confidence_sum / valid_confidence_count, 1)
+        else:
+            avg_confidence = 0
+        
+        # Ensure all values are valid numbers
+        total_predictions = max(0, total_predictions)
+        high_confidence_count = max(0, high_confidence_count)
+        avg_confidence = max(0, min(100, avg_confidence))  # Clamp between 0-100
         
         # Format sport breakdown
-        sport_breakdown = [{"sport": sport, "count": count} for sport, count in sport_counts.items()]
+        sport_breakdown = [{"sport": sport, "count": count} for sport, count in sport_counts.items() if count > 0]
         sport_breakdown.sort(key=lambda x: x["count"], reverse=True)
         
         # Get outcome summary
@@ -2077,18 +2105,27 @@ async def get_dashboard_metrics():
         push_count = 0
         
         if outcomes_sheet:
-            outcomes_rows = outcomes_sheet.get_all_values()
-            if len(outcomes_rows) > 1:
-                outcome_data_rows = outcomes_rows[1:]
-                for row in outcome_data_rows:
-                    if len(row) > 1:
-                        outcome = row[1].lower() if row[1] else ""
-                        if outcome == "win":
-                            win_count += 1
-                        elif outcome == "loss":
-                            loss_count += 1
-                        elif outcome == "push":
-                            push_count += 1
+            try:
+                outcomes_rows = outcomes_sheet.get_all_values()
+                if len(outcomes_rows) > 1:
+                    outcome_data_rows = outcomes_rows[1:]
+                    for row in outcome_data_rows:
+                        if len(row) > 1:
+                            outcome = str(row[1]).lower().strip() if row[1] else ""
+                            if outcome == "win":
+                                win_count += 1
+                            elif outcome == "loss":
+                                loss_count += 1
+                            elif outcome == "push":
+                                push_count += 1
+            except Exception as e:
+                logger.warning(f"Error processing outcomes: {str(e)}")
+        
+        # Calculate win rate with error handling
+        total_outcomes = win_count + loss_count
+        win_rate = round((win_count / total_outcomes) * 100, 1) if total_outcomes > 0 else 0
+        
+        logger.info(f"Dashboard metrics calculated: predictions={total_predictions}, high_conf={high_confidence_count}, avg_conf={avg_confidence}")
         
         return {
             "total_predictions": total_predictions,
@@ -2099,13 +2136,18 @@ async def get_dashboard_metrics():
                 "win": win_count,
                 "loss": loss_count,
                 "push": push_count,
-                "win_rate": round((win_count / (win_count + loss_count)) * 100, 1) if (win_count + loss_count) > 0 else 0
+                "win_rate": win_rate
             }
         }
     except Exception as e:
         logger.error(f"Error generating dashboard metrics: {str(e)}")
         logger.error(traceback.format_exc())
-        return {"error": f"Error generating dashboard metrics: {str(e)}"}
+        return {
+            "total_predictions": 0,
+            "high_confidence_picks": 0,
+            "average_confidence": 0,
+            "sport_breakdown": []
+        }
 
 @app.get("/games")
 async def get_games(
@@ -2418,7 +2460,7 @@ async def get_best_pick(
         in_season_sports = get_in_season_sports()
         logger.info(f"Fetching data for in-season sports: {in_season_sports}")
         
-        # Try to fetch real data first, but only for in-season sports
+        # Try to fetch real data first, but be more flexible with filtering
         for sp, url in SPORTS_BASE_URLS.items():
             # Skip sports that are not in season
             if sp not in in_season_sports:
@@ -2438,40 +2480,52 @@ async def get_best_pick(
                         for game in data:
                             game["sport"] = sp
                         
-                        # Filter for current day matches only
-                        data = filter_games_by_date(data, current_day_only=True)
+                        # Try current day first, then expand to upcoming games if needed
+                        filtered_data = filter_games_by_date(data, current_day_only=True)
+                        if not filtered_data:
+                            # If no current day games, try upcoming games
+                            filtered_data = filter_games_by_date(data, current_day_only=False)
+                            logger.info(f"No current day games for {sp}, using upcoming games: {len(filtered_data)} found")
                         
-                        if data:
-                            all_desc.extend(format_odds_for_ai(data, sp))
+                        if filtered_data:
+                            all_desc.extend(format_odds_for_ai(filtered_data, sp))
+                            logger.info(f"Added {len(filtered_data)} games for {sp}")
+                        else:
+                            logger.warning(f"No valid games found for {sp}")
             except Exception as e:
                 logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         
         # Generate recommendation if we have data
         if all_desc:
+            logger.info(f"Generating recommendation from {len(all_desc)} game descriptions")
             result = generate_best_pick_with_ai(all_desc)
             if result and not result.get("error"):
                 bets_cache[cache_key] = result
                 return {"best_pick": result}
+            else:
+                logger.warning(f"AI failed to generate valid recommendation: {result}")
         
-        # Fallback to OpenAI if no data - but only for tennis with real data validation
-        logger.info("No real game data available, checking for tennis fallback")
+        # If no real games available, try to provide a helpful fallback
+        logger.info("No real game data available, providing fallback recommendation")
         
-        # Only use tennis fallback if tennis was specifically requested
-        if sport and sport.upper() == "TENNIS":
-            logger.info("Using OpenAI fallback for tennis")
-            direct_recommendation = generate_tennis_recommendation_with_openai("straight")
-            if direct_recommendation:
-                result = {
-                    "recommendation": direct_recommendation.get("bet", ""),
-                    "explanation": direct_recommendation.get("explanation", ""),
-                    "confidence": direct_recommendation.get("confidence", 75),
-                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                    "sport": "TENNIS"
-                }
-                bets_cache[cache_key] = result
-                return {"best_pick": result}
+        # Generate a fallback recommendation based on available sports
+        fallback_sports = [sp for sp in in_season_sports if sp != "TENNIS"]
+        if fallback_sports:
+            primary_sport = fallback_sports[0]
+            logger.info(f"Generating fallback recommendation for {primary_sport}")
+            
+            # Create a simple fallback recommendation
+            fallback_result = {
+                "recommendation": f"Check {primary_sport} games later today",
+                "explanation": f"No current betting opportunities available for {primary_sport}. Please check back in a few hours for new games and updated odds.",
+                "confidence": 50,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": primary_sport
+            }
+            bets_cache[cache_key] = fallback_result
+            return {"best_pick": fallback_result}
         
-        # If no real games available, return error instead of fake data
+        # Final fallback
         return {"error": "No current or upcoming games available for betting. Please check back later for new games."}
             
         return {"error": "Unable to generate recommendation"}
