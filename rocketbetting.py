@@ -621,8 +621,8 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
         tomorrow = current_date + timedelta(days=1)
         cutoff_time = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=timezone.utc)
     else:
-        # For future games, just exclude past games
-        cutoff_time = current_time
+        # For future games, just exclude past games - but add a small buffer to avoid edge cases
+        cutoff_time = current_time - timedelta(minutes=30)  # 30 minute buffer for games that just started
     
     filtered_games = []
     
@@ -634,15 +634,27 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
         try:
             # Parse the game time
             game_time_str = game["commence_time"]
+            
+            # Handle different time formats
             if game_time_str.endswith('Z'):
                 game_time_str = game_time_str[:-1] + '+00:00'
+            elif '+' not in game_time_str and 'T' in game_time_str:
+                # Assume UTC if no timezone specified
+                game_time_str = game_time_str + '+00:00'
             
             game_time = datetime.fromisoformat(game_time_str)
             
             # Check if game is in the future relative to our cutoff
             if game_time >= cutoff_time:
-                filtered_games.append(game)
-                logger.info(f"Including game: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')} at {game_time}")
+                # Additional validation: ensure the game has valid team names
+                home_team = game.get('home_team', '').strip()
+                away_team = game.get('away_team', '').strip()
+                
+                if home_team and away_team and home_team != 'TBD' and away_team != 'TBD':
+                    filtered_games.append(game)
+                    logger.info(f"Including future game: {home_team} vs {away_team} at {game_time}")
+                else:
+                    logger.warning(f"Excluding game with invalid teams: {home_team} vs {away_team}")
             else:
                 logger.info(f"Excluding past game: {game.get('home_team', 'Unknown')} vs {game.get('away_team', 'Unknown')} at {game_time}")
                 
@@ -1355,6 +1367,33 @@ def standardize_text(text: str) -> str:
     
     return text
 
+def validate_recommendation_against_games(recommendation: Dict[str, Any], game_descriptions: List[str]) -> bool:
+    """
+    Validate that an AI recommendation actually matches a real game from the provided descriptions.
+    
+    Args:
+        recommendation: The AI recommendation to validate
+        game_descriptions: List of real game descriptions used to generate the recommendation
+    
+    Returns:
+        True if the recommendation matches a real game, False otherwise
+    """
+    if not recommendation or not game_descriptions:
+        return False
+    
+    recommended_team = recommendation.get('recommendation', '').strip()
+    if not recommended_team:
+        return False
+    
+    # Check if the recommended team appears in any of the real game descriptions
+    for game_desc in game_descriptions:
+        if recommended_team.lower() in game_desc.lower():
+            logger.info(f"✅ Validated recommendation '{recommended_team}' against real game: {game_desc[:100]}...")
+            return True
+    
+    logger.warning(f"❌ Recommendation '{recommended_team}' not found in any real games")
+    return False
+
 def get_confidence_label(confidence: int) -> str:
     """
     Convert confidence score to standardized label.
@@ -1440,9 +1479,20 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
             "\n4. Tournament stage and player's historical performance at this stage"
             "\n5. Physical condition and rest days between matches"
             "\n6. Playing style matchups (e.g., baseline vs. serve-and-volley)"
-            "\n\nOnly recommend bets on matches that are confirmed to be scheduled in the future, not past matches."
+            "\n\nCRITICAL: Only recommend bets on matches that are confirmed to be scheduled in the future, not past matches."
             "\n\nVERY IMPORTANT: Your recommendation MUST explicitly state that it is for an upcoming match and include an approximate date."
         )
+    
+    # Add general date validation guidance for all sports
+    sport_specific_guidance += (
+        "\n\nCRITICAL DATE VALIDATION RULES:"
+        "\n1. ONLY recommend bets on games/matches that are scheduled to happen in the future"
+        "\n2. NEVER recommend bets on games that have already started or finished"
+        "\n3. If you see a game time that's in the past, DO NOT recommend it"
+        "\n4. Always verify the game date and time before making a recommendation"
+        "\n5. If you're unsure about a game's timing, DO NOT recommend it"
+        "\n6. Your recommendation MUST include the approximate date/time of the game"
+    )
     
     # Limit the number of games to prevent token limit issues
     max_games = 25  # Limit to 25 games to stay within token limits
@@ -1464,8 +1514,9 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         "\n7. Value compared to the offered odds"
         + sport_specific_guidance +  # Add tennis guidance if relevant
         "\n\nReturn ONLY a valid JSON object with no additional commentary. The JSON must follow EXACTLY this format:"
-        '\n{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Detailed reasoning with specific data points]", "confidence": [0-100]}'
+        '\n{"sport": "[Sport Name]", "bet": "[Team Name]", "explanation": "[Detailed reasoning with specific data points]", "confidence": [0-100], "game_time": "[Approximate date/time of the game]"}'
         "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
+        "\n\nCRITICAL: Your recommendation MUST include the game_time field with the approximate date/time of the upcoming game."
         "\n\nMake sure to mention EXPLICITLY in your explanation that this bet is for an UPCOMING match/game that will happen in the future."
         "\n\n" + sport_line + "\n" + "\n".join(limited_descriptions)
     )
@@ -1502,8 +1553,14 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
             "explanation": rec_json['explanation'],
             "confidence": confidence,
             "last_updated": datetime.now(timezone.utc).isoformat(),
-            "sport": rec_json.get('sport', sport_hint or "Unknown")
+            "sport": rec_json.get('sport', sport_hint or "Unknown"),
+            "game_time": rec_json.get('game_time', 'Unknown')
         }
+        
+        # Validate that the recommendation matches a real game
+        if not validate_recommendation_against_games(result, game_descriptions):
+            logger.warning(f"AI recommendation doesn't match any real games: {result.get('recommendation', 'Unknown')}")
+            return {"error": "Unable to generate a valid recommendation for current games. Please try again later."}
         
         # Standardize the response
         result = standardize_betting_response(raw_result, "straight")
@@ -2396,19 +2453,26 @@ async def get_best_pick(
                 bets_cache[cache_key] = result
                 return {"best_pick": result}
         
-        # Fallback to OpenAI if no data
-        logger.info("Using OpenAI fallback for best pick")
-        direct_recommendation = generate_tennis_recommendation_with_openai("straight")
-        if direct_recommendation:
-            result = {
-                "recommendation": direct_recommendation.get("bet", ""),
-                "explanation": direct_recommendation.get("explanation", ""),
-                "confidence": direct_recommendation.get("confidence", 75),
-                "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                "sport": "TENNIS"
-            }
-            bets_cache[cache_key] = result
-            return {"best_pick": result}
+        # Fallback to OpenAI if no data - but only for tennis with real data validation
+        logger.info("No real game data available, checking for tennis fallback")
+        
+        # Only use tennis fallback if tennis was specifically requested
+        if sport and sport.upper() == "TENNIS":
+            logger.info("Using OpenAI fallback for tennis")
+            direct_recommendation = generate_tennis_recommendation_with_openai("straight")
+            if direct_recommendation:
+                result = {
+                    "recommendation": direct_recommendation.get("bet", ""),
+                    "explanation": direct_recommendation.get("explanation", ""),
+                    "confidence": direct_recommendation.get("confidence", 75),
+                    "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
+                    "sport": "TENNIS"
+                }
+                bets_cache[cache_key] = result
+                return {"best_pick": result}
+        
+        # If no real games available, return error instead of fake data
+        return {"error": "No current or upcoming games available for betting. Please check back later for new games."}
             
         return {"error": "Unable to generate recommendation"}
         
@@ -2560,8 +2624,8 @@ async def get_sport_best_pick(
         if not tennis_data:
             return {"sport_best_pick": {"error": "No real tennis data available from API"}}
         
-        # Filter for current and future matches
-        current_tennis_data = filter_games_by_date(tennis_data, current_day_only=False)
+        # Filter for current and future matches - CRITICAL: Only include future games
+        current_tennis_data = filter_games_by_date(tennis_data, current_day_only=True)
         
         if not current_tennis_data:
             return {"sport_best_pick": {"error": "No current or upcoming tennis matches available"}}
