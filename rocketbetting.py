@@ -2103,8 +2103,11 @@ async def get_dashboard_metrics():
         high_confidence_count = max(0, high_confidence_count)
         avg_confidence = max(0, min(100, avg_confidence))  # Clamp between 0-100
         
-        # Format sport breakdown
-        sport_breakdown = [{"sport": sport, "count": count} for sport, count in sport_counts.items() if count > 0]
+        # Format sport breakdown with validation
+        sport_breakdown = []
+        for sport, count in sport_counts.items():
+            if count > 0 and isinstance(count, (int, float)) and not math.isnan(count):
+                sport_breakdown.append({"sport": sport, "count": int(count)})
         sport_breakdown.sort(key=lambda x: x["count"], reverse=True)
         
         # Get outcome summary
@@ -2130,9 +2133,15 @@ async def get_dashboard_metrics():
             except Exception as e:
                 logger.warning(f"Error processing outcomes: {str(e)}")
         
-        # Calculate win rate with error handling
+        # Calculate win rate with error handling and validation
         total_outcomes = win_count + loss_count
         win_rate = round((win_count / total_outcomes) * 100, 1) if total_outcomes > 0 else 0
+        
+        # Ensure all outcome values are valid numbers
+        win_count = max(0, win_count)
+        loss_count = max(0, loss_count)
+        push_count = max(0, push_count)
+        win_rate = max(0, min(100, win_rate))  # Clamp between 0-100
         
         logger.info(f"Dashboard metrics calculated: predictions={total_predictions}, high_conf={high_confidence_count}, avg_conf={avg_confidence}")
         
@@ -2543,6 +2552,21 @@ async def get_best_pick(
         # If no real games available, try to provide a helpful fallback
         logger.info("No real game data available, providing fallback recommendation")
         
+        # If a specific sport was requested, prioritize that sport in the fallback
+        if sport and sport.upper() in in_season_sports:
+            requested_sport = sport.upper()
+            logger.info(f"Generating fallback recommendation for requested sport: {requested_sport}")
+            
+            fallback_result = {
+                "recommendation": f"Check {requested_sport} games later today",
+                "explanation": f"No current betting opportunities available for {requested_sport}. Please check back in a few hours for new games and updated odds.",
+                "confidence": 50,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": requested_sport
+            }
+            bets_cache[cache_key] = fallback_result
+            return {"best_pick": fallback_result}
+        
         # Generate a fallback recommendation based on available sports
         fallback_sports = [sp for sp in in_season_sports if sp != "TENNIS"]
         if fallback_sports:
@@ -2781,8 +2805,39 @@ async def get_sport_best_pick(
         for game in data:
             game["sport"] = sp
         
-        # Filter for current and future matches (less restrictive)
-        data = filter_games_by_date(data, current_day_only=False)
+        # Filter for current day matches only, then apply additional time restrictions
+        data = filter_games_by_date(data, current_day_only=True)
+        
+        if data:
+            # Only include games that are actually happening soon
+            soon_games = []
+            current_time = datetime.now(timezone.utc)
+            for game in data:
+                try:
+                    game_time_str = game.get("commence_time", "")
+                    if game_time_str.endswith('Z'):
+                        game_time_str = game_time_str[:-1] + '+00:00'
+                    elif '+' not in game_time_str and 'T' in game_time_str:
+                        game_time_str = game_time_str + '+00:00'
+                    
+                    game_time = datetime.fromisoformat(game_time_str)
+                    time_until_game = game_time - current_time
+                    hours_until_game = time_until_game.total_seconds() / 3600
+                    
+                    # Only include games happening within the next 24 hours
+                    if 0 <= hours_until_game <= 24:
+                        soon_games.append(game)
+                        logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
+                except Exception as e:
+                    logger.warning(f"Error processing game time for {sp}: {str(e)}")
+                    continue
+            
+            if soon_games:
+                data = soon_games
+                logger.info(f"Using {len(soon_games)} soon games for {sp}")
+            else:
+                logger.warning(f"No soon games found for {sp}")
+                data = []
         
         if not data:
             logger.warning(f"No games found for {sp}, attempting to generate fallback recommendation")
@@ -2971,8 +3026,39 @@ async def get_player_best_bet(
         if not tennis_data:
             return {"best_player_bet": {"error": "No real tennis data available from API"}}
         
-        # Filter for current and future matches
-        current_tennis_data = filter_games_by_date(tennis_data, current_day_only=False)
+        # Filter for current day matches only, then apply additional time restrictions
+        current_tennis_data = filter_games_by_date(tennis_data, current_day_only=True)
+        
+        if current_tennis_data:
+            # Only include games that are actually happening soon
+            soon_games = []
+            current_time = datetime.now(timezone.utc)
+            for game in current_tennis_data:
+                try:
+                    game_time_str = game.get("commence_time", "")
+                    if game_time_str.endswith('Z'):
+                        game_time_str = game_time_str[:-1] + '+00:00'
+                    elif '+' not in game_time_str and 'T' in game_time_str:
+                        game_time_str = game_time_str + '+00:00'
+                    
+                    game_time = datetime.fromisoformat(game_time_str)
+                    time_until_game = game_time - current_time
+                    hours_until_game = time_until_game.total_seconds() / 3600
+                    
+                    # Only include games happening within the next 24 hours
+                    if 0 <= hours_until_game <= 24:
+                        soon_games.append(game)
+                        logger.info(f"Adding soon tennis game: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
+                except Exception as e:
+                    logger.warning(f"Error processing tennis game time: {str(e)}")
+                    continue
+            
+            if soon_games:
+                current_tennis_data = soon_games
+                logger.info(f"Using {len(soon_games)} soon tennis games")
+            else:
+                logger.warning(f"No soon tennis games found")
+                current_tennis_data = []
         
         if not current_tennis_data:
             return {"best_player_bet": {"error": "No current or upcoming tennis matches available"}}
@@ -3040,16 +3126,23 @@ async def get_player_best_bet(
             fallback_prompt = f"""
             Generate 5 realistic player prop bets for upcoming {league_name} ({sp}) games.
             For each player, include:
-            1. Player name (must be a real current {sp} player)
+            1. Player name (must be a real current {sp} player who is NOT injured)
             2. Their team
             3. The opponent team
             4. A realistic prop bet (e.g., hits, strikeouts for MLB; goals, assists for MLS)
             5. A realistic line for that prop
             6. Realistic odds
+            
+            CRITICAL: Do NOT include any injured players. For MLB, specifically exclude:
+            - Jacob deGrom (injured)
+            - Any player on the 60-day IL
+            - Any player with recent injury reports
+            
             Format each player prop as:
             "{sp}: [Player Name] - [Prop Type] [Line] in [Team] vs [Opponent Team] | Odds: [Odds] ([Implied Probability]% implied probability) | Teams: [Team] (Home), [Opponent] (Away)"
+            
             Make these as realistic and accurate as possible for upcoming games.
-            Include ONLY players who have games scheduled in the next few days.
+            Include ONLY players who have games scheduled in the next few days AND are healthy/active.
             """
             
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
