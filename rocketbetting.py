@@ -606,7 +606,7 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
     
     Args:
         games_data: List of game data from API
-        current_day_only: If True, only include games from today. If False, include today and next 3 days max.
+        current_day_only: If True, only include games from today. If False, include today and next 7 days max.
     
     Returns:
         Filtered list of games
@@ -617,15 +617,15 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
     current_time = datetime.now(timezone.utc)
     current_date = current_time.date()
     
-    # For current day only, we want games that start within the next 48 hours from now
+    # For current day only, we want games that start within the next 72 hours from now (more flexible)
     if current_day_only:
-        # Include games starting within the next 48 hours (covers today and tomorrow)
-        max_future_time = current_time + timedelta(hours=48)
-        cutoff_time = current_time - timedelta(minutes=30)  # 30 minute buffer for games that just started
+        # Include games starting within the next 72 hours (covers today and next 2 days)
+        max_future_time = current_time + timedelta(hours=72)
+        cutoff_time = current_time - timedelta(hours=2)  # 2 hour buffer for games that just started
     else:
-        # For future games, limit to next 7 days maximum to avoid far-future games
-        max_future_time = current_time + timedelta(days=7)
-        cutoff_time = current_time - timedelta(minutes=30)  # 30 minute buffer for games that just started
+        # For future games, limit to next 14 days maximum to avoid far-future games
+        max_future_time = current_time + timedelta(days=14)
+        cutoff_time = current_time - timedelta(hours=2)  # 2 hour buffer for games that just started
     
     filtered_games = []
     
@@ -2359,79 +2359,10 @@ async def get_games(
             # Filter for current and upcoming tennis matches (less restrictive)
             tennis_data = filter_games_by_date(tennis_data, current_day_only=False)
             
-            # If no current day real matches, use OpenAI to generate data
+            # If no current day real matches, log the issue but don't generate fake data
             if not tennis_data:
-                logger.info("No real current day tennis matches found for all sports view, generating with OpenAI")
-                tennis_predictions = generate_current_day_tennis_predictions("straight", 5)
-                
-                # Transform these predictions into game data format
-                if tennis_predictions:
-                    for i, prediction in enumerate(tennis_predictions):
-                        # Extract player names
-                        match = re.search(r'TENNIS: (.*?) vs (.*?) on', prediction)
-                        if match:
-                            player1 = match.group(1).strip()
-                            player2 = match.group(2).strip()
-                            
-                            # Extract date
-                            date_match = re.search(r'on (\d{4}-\d{2}-\d{2})', prediction)
-                            date_str = date_match.group(1) if date_match else None
-                            
-                            # If we have date, create a datetime
-                            future_time = None
-                            if date_str:
-                                try:
-                                    future_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                                    future_time = datetime.combine(future_date, datetime.min.time())
-                                    future_time = future_time.replace(tzinfo=timezone.utc) + timedelta(hours=12)  # Noon UTC
-                                except Exception:
-                                    # Use a future date if parsing fails
-                                    future_time = datetime.now(timezone.utc) + timedelta(days=i + 1, hours=12)
-                            else:
-                                # Use a future date if no date in the string
-                                future_time = datetime.now(timezone.utc) + timedelta(days=i + 1, hours=12)
-                            
-                            # Extract odds if possible
-                            odds1 = 2.0
-                            odds2 = 2.0
-                            odds_match = re.search(r'Odds: .*?: (\d+\.\d+).*?, .*?: (\d+\.\d+)', prediction)
-                            if odds_match:
-                                try:
-                                    odds1 = float(odds_match.group(1))
-                                    odds2 = float(odds_match.group(2))
-                                except ValueError:
-                                    pass
-                            
-                            # Create a game data structure
-                            game_data = {
-                                "id": f"openai_tennis_{uuid.uuid4()}",
-                                "sport": "TENNIS",
-                                "home_team": player1,
-                                "away_team": player2,
-                                "commence_time": future_time.isoformat(),
-                                "bookmakers": [
-                                    {
-                                        "title": "Generated Odds",
-                                        "markets": [
-                                            {
-                                                "key": "h2h",
-                                                "outcomes": [
-                                                    {"name": player1, "price": odds1},
-                                                    {"name": player2, "price": odds2}
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                            tennis_data.append(game_data)
-                            
-                            # Store in Games sheet
-                            if sheets_manager:
-                                try:
-                                    sheets_manager.store_game(game_data)
-                                except Exception as e:
-                                    logger.error(f"Error storing generated tennis game in Games sheet: {str(e)}")
+                logger.info("No real current day tennis matches found for all sports view")
+                logger.info("Tennis data will be excluded from recommendations until real matches are available")
             
             all_games.extend(tennis_data)
         else:
@@ -2614,17 +2545,57 @@ async def get_best_pick(
             else:
                 logger.warning(f"AI failed to generate valid recommendation: {result}")
         
-        # If no real games available, try to provide a helpful fallback
-        logger.info("No real game data available, providing fallback recommendation")
+        # If no real games available, provide a more helpful response
+        logger.info("No real game data available, providing informative response")
         
-        # If a specific sport was requested, prioritize that sport in the fallback
+        # Check what sports are actually available in the schedule
+        try:
+            schedule_response = await get_games()
+            if isinstance(schedule_response, list) and schedule_response:
+                available_sports = list(set([game.get("sport", "").upper() for game in schedule_response if game.get("sport")]))
+                logger.info(f"Available sports in schedule: {available_sports}")
+                
+                if available_sports:
+                    # Find the most relevant sport
+                    if sport and sport.upper() in available_sports:
+                        target_sport = sport.upper()
+                    else:
+                        target_sport = available_sports[0]
+                    
+                    # Get games for this sport
+                    sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
+                    
+                    if sport_games:
+                        # Format these games for AI analysis
+                        sport_desc = format_odds_for_ai(sport_games, target_sport)
+                        if sport_desc:
+                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport}")
+                            result = generate_best_pick_with_ai(sport_desc)
+                            if result and not result.get("error"):
+                                bets_cache[cache_key] = result
+                                return {"best_pick": result}
+                    
+                    # If we have games but AI failed, provide a specific message
+                    fallback_result = {
+                        "recommendation": f"Check {target_sport} games in the schedule",
+                        "explanation": f"Found {len(sport_games)} {target_sport} games in the schedule. Please review the game schedule for current betting opportunities.",
+                        "confidence": 60,
+                        "last_updated": datetime.now(timezone.utc).isoformat(),
+                        "sport": target_sport
+                    }
+                    bets_cache[cache_key] = fallback_result
+                    return {"best_pick": fallback_result}
+        except Exception as e:
+            logger.error(f"Error checking schedule for fallback: {str(e)}")
+        
+        # If a specific sport was requested, provide sport-specific guidance
         if sport and sport.upper() in in_season_sports:
             requested_sport = sport.upper()
-            logger.info(f"Generating fallback recommendation for requested sport: {requested_sport}")
+            logger.info(f"Generating sport-specific guidance for: {requested_sport}")
             
             fallback_result = {
-                "recommendation": f"Check {requested_sport} games later today",
-                "explanation": f"No current betting opportunities available for {requested_sport}. Please check back in a few hours for new games and updated odds.",
+                "recommendation": f"Review {requested_sport} schedule for current games",
+                "explanation": f"Please check the {requested_sport} schedule for current games and betting opportunities. The system is currently updating game data.",
                 "confidence": 50,
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "sport": requested_sport
@@ -2632,25 +2603,8 @@ async def get_best_pick(
             bets_cache[cache_key] = fallback_result
             return {"best_pick": fallback_result}
         
-        # Generate a fallback recommendation based on available sports
-        fallback_sports = [sp for sp in in_season_sports if sp != "TENNIS"]
-        if fallback_sports:
-            primary_sport = fallback_sports[0]
-            logger.info(f"Generating fallback recommendation for {primary_sport}")
-            
-            # Create a simple fallback recommendation
-            fallback_result = {
-                "recommendation": f"Check {primary_sport} games later today",
-                "explanation": f"No current betting opportunities available for {primary_sport}. Please check back in a few hours for new games and updated odds.",
-                "confidence": 50,
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-                "sport": primary_sport
-            }
-            bets_cache[cache_key] = fallback_result
-            return {"best_pick": fallback_result}
-        
-        # Final fallback
-        return {"error": "No current or upcoming games available for betting. Please check back later for new games."}
+        # Final fallback with more helpful information
+        return {"error": "No current betting opportunities available. Please check the game schedule for current matches and try again in a few minutes."}
             
         return {"error": "Unable to generate recommendation"}
         
@@ -2770,21 +2724,51 @@ async def get_best_parlay(
                 bets_cache[cache_key] = result
                 return {"best_parlay": result}
         
-        # Fallback to OpenAI if no data
-        logger.info("Using OpenAI fallback for best parlay")
-        direct_recommendation = generate_tennis_recommendation_with_openai("parlay")
-        if direct_recommendation:
-            result = {
-                "recommendation": direct_recommendation.get("parlay", ""),
-                "explanation": direct_recommendation.get("explanation", ""),
-                "confidence": direct_recommendation.get("confidence", 65),
-                "last_updated": direct_recommendation.get("last_updated", datetime.now(timezone.utc).isoformat()),
-                "sport": "TENNIS"
-            }
-            bets_cache[cache_key] = result
-            return {"best_parlay": result}
-            
-        return {"error": "Unable to generate recommendation"}
+        # If no real games available, provide a more helpful response
+        logger.info("No real game data available for parlay, providing informative response")
+        
+        # Check what sports are actually available in the schedule
+        try:
+            schedule_response = await get_games()
+            if isinstance(schedule_response, list) and schedule_response:
+                available_sports = list(set([game.get("sport", "").upper() for game in schedule_response if game.get("sport")]))
+                logger.info(f"Available sports in schedule for parlay: {available_sports}")
+                
+                if available_sports:
+                    # Find the most relevant sport
+                    if sport and sport.upper() in available_sports:
+                        target_sport = sport.upper()
+                    else:
+                        target_sport = available_sports[0]
+                    
+                    # Get games for this sport
+                    sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
+                    
+                    if sport_games and len(sport_games) >= 2:  # Need at least 2 games for a parlay
+                        # Format these games for AI analysis
+                        sport_desc = format_odds_for_ai(sport_games, target_sport)
+                        if sport_desc:
+                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} parlay")
+                            result = generate_best_parlay_with_ai(sport_desc)
+                            if result and not result.get("error"):
+                                bets_cache[cache_key] = result
+                                return {"best_parlay": result}
+                    
+                    # If we have games but AI failed, provide a specific message
+                    fallback_result = {
+                        "recommendation": f"Check {target_sport} games in the schedule for parlay opportunities",
+                        "explanation": f"Found {len(sport_games)} {target_sport} games in the schedule. Please review the game schedule for current parlay betting opportunities.",
+                        "confidence": 60,
+                        "last_updated": datetime.now(timezone.utc).isoformat(),
+                        "sport": target_sport
+                    }
+                    bets_cache[cache_key] = fallback_result
+                    return {"best_parlay": fallback_result}
+        except Exception as e:
+            logger.error(f"Error checking schedule for parlay fallback: {str(e)}")
+        
+        # Final fallback with more helpful information
+        return {"error": "No current parlay opportunities available. Please check the game schedule for current matches and try again in a few minutes."}
         
     except Exception as e:
         logger.error(f"Unhandled error in get_best_parlay: {str(e)}")
@@ -2937,16 +2921,18 @@ async def get_sport_best_pick(
                     data = []
         
         if not data:
-            logger.warning(f"No games found for {sp}, attempting to generate fallback recommendation")
-            # Try to generate a fallback recommendation using AI
-            try:
-                fallback_result = generate_best_pick_with_ai([f"No current {sp} games available. Please check back later for upcoming matches."])
-                if fallback_result and not fallback_result.get("error"):
-                    return {"sport_best_pick": fallback_result}
-            except Exception as e:
-                logger.error(f"Error generating fallback recommendation: {str(e)}")
+            logger.warning(f"No games found for {sp}, providing informative response")
             
-            return {"error": f"No current or upcoming games found for {sp}. Please check back later."}
+            # Provide a more helpful response when no games are available
+            fallback_result = {
+                "recommendation": f"No specific bet details available for {sp}",
+                "explanation": f"No current or upcoming {sp} games found in the schedule. Please check the game schedule for current matches and try again in a few minutes.",
+                "confidence": 0,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": sp
+            }
+            bets_cache[cache_key] = fallback_result
+            return {"sport_best_pick": fallback_result}
         
         # Debug logging
         logger.info(f"Generating best pick for {sp} with {len(data)} games")
@@ -3072,16 +3058,18 @@ async def get_sport_best_parlay(
             data = filter_games_by_date(data, current_day_only=False)
         
         if not data:
-            logger.warning(f"No games found for {sp}, attempting to generate fallback parlay recommendation")
-            # Try to generate a fallback recommendation using AI
-            try:
-                fallback_result = generate_best_parlay_with_ai([f"No current {sp} games available. Please check back later for upcoming matches."])
-                if fallback_result and not fallback_result.get("error"):
-                    return {"sport_best_parlay": fallback_result}
-            except Exception as e:
-                logger.error(f"Error generating fallback parlay recommendation: {str(e)}")
+            logger.warning(f"No games found for {sp}, providing informative response")
             
-            return {"error": f"No current or upcoming games found for {sp}. Please check back later."}
+            # Provide a more helpful response when no games are available
+            fallback_result = {
+                "recommendation": f"No specific bet details available for {sp}",
+                "explanation": f"No current or upcoming {sp} games found in the schedule. Please check the game schedule for current matches and try again in a few minutes.",
+                "confidence": 0,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "sport": sp
+            }
+            bets_cache[cache_key] = fallback_result
+            return {"sport_best_parlay": fallback_result}
         
         # Debug logging
         logger.info(f"Generating best parlay for {sp} with {len(data)} games")
