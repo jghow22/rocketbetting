@@ -1511,9 +1511,21 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
     if len(game_descriptions) > max_games:
         logger.info(f"Limited game descriptions from {len(game_descriptions)} to {max_games} to prevent token limit issues")
     
+    # Log the games being sent to AI for debugging
+    logger.info(f"Sending {len(limited_descriptions)} games to AI for analysis:")
+    for i, desc in enumerate(limited_descriptions[:5]):  # Log first 5 games
+        logger.info(f"  Game {i+1}: {desc[:100]}...")  # Log first 100 chars
+    if len(limited_descriptions) > 5:
+        logger.info(f"  ... and {len(limited_descriptions) - 5} more games")
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and recommend ONE specific bet that offers the best value, NOT simply the best odds. "
+        "\n\nCRITICAL CONSTRAINT: You can ONLY recommend bets on teams that are actually playing in the games listed below. "
+        "DO NOT create matchups between teams that are not scheduled to play each other. "
+        "For example, if you see 'Seattle Mariners vs Chicago White Sox' and 'Pittsburgh Pirates vs Cincinnati Reds', "
+        "you CANNOT recommend 'Seattle Mariners vs Pittsburgh Pirates' because they are not playing each other. "
+        "You must pick ONE team from ONE of the actual games listed."
         "\n\nIn your analysis, consider the following factors, in order of importance:"
         "\n1. Recent team performance and momentum (last 5-10 games)"
         "\n2. Head-to-head matchups between the teams this season"
@@ -1528,7 +1540,8 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         "\n\nNote: Only assign confidence scores above 80 when you have extremely strong conviction backed by multiple data points."
         "\n\nCRITICAL: Your recommendation MUST include the game_time field with the approximate date/time of the upcoming game."
         "\n\nMake sure to mention EXPLICITLY in your explanation that this bet is for an UPCOMING match/game that will happen in the future."
-        "\n\n" + sport_line + "\n" + "\n".join(limited_descriptions)
+        "\n\nAVAILABLE GAMES (you can ONLY recommend from these):"
+        "\n" + sport_line + "\n" + "\n".join(limited_descriptions)
     )
     
     try:
@@ -1545,6 +1558,7 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         )
         
         rec_text = response.choices[0].message.content.strip()
+        logger.info(f"AI response for straight bet: {rec_text[:200]}...")  # Log first 200 chars
         
         # Try to parse as JSON
         try:
@@ -1660,9 +1674,21 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
     if len(game_descriptions) > max_games:
         logger.info(f"Limited game descriptions from {len(game_descriptions)} to {max_games} to prevent token limit issues")
     
+    # Log the games being sent to AI for debugging
+    logger.info(f"Sending {len(limited_descriptions)} games to AI for parlay analysis:")
+    for i, desc in enumerate(limited_descriptions[:5]):  # Log first 5 games
+        logger.info(f"  Game {i+1}: {desc[:100]}...")  # Log first 100 chars
+    if len(limited_descriptions) > 5:
+        logger.info(f"  ... and {len(limited_descriptions) - 5} more games")
+    
     prompt = (
         "You are an expert sports betting analyst with deep knowledge of sports statistics, team dynamics, and betting strategy. "
         "Analyze the following games and create a 2-3 team parlay bet that offers the best value, NOT simply the highest potential payout. "
+        "\n\nCRITICAL CONSTRAINT: You can ONLY recommend teams that are actually playing in the games listed below. "
+        "DO NOT create matchups between teams that are not scheduled to play each other. "
+        "For example, if you see 'Seattle Mariners vs Chicago White Sox' and 'Pittsburgh Pirates vs Cincinnati Reds', "
+        "you CANNOT recommend 'Seattle Mariners & Pittsburgh Pirates' because they are not playing each other. "
+        "You must pick teams from the actual games listed, and each team must be playing in their respective game."
         "\n\nIn your analysis, consider the following factors for EACH game in your parlay:"
         "\n1. Recent team performance and momentum (last 5-10 games)"
         "\n2. Head-to-head matchups between the teams this season"
@@ -1676,7 +1702,8 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         '\n{"sport": "[Sport Name]", "parlay": "[Team 1] & [Team 2] (add more teams if applicable)", "explanation": "[Detailed reasoning with specific data points for EACH pick]", "confidence": [0-100]}'
         "\n\nNote: Parlay confidence should generally be lower than straight bets due to compounding risk. Only assign confidence scores above 70 in extraordinary circumstances."
         "\n\nMake sure to mention EXPLICITLY in your explanation that this parlay is for UPCOMING matches/games that will happen in the future."
-        "\n\n" + sport_line + "\n" + "\n".join(limited_descriptions)
+        "\n\nAVAILABLE GAMES (you can ONLY recommend teams from these):"
+        "\n" + sport_line + "\n" + "\n".join(limited_descriptions)
     )
     
     try:
@@ -1693,6 +1720,7 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         )
         
         rec_text = response.choices[0].message.content.strip()
+        logger.info(f"AI response for parlay: {rec_text[:200]}...")  # Log first 200 chars
         
         # Try to parse as JSON
         try:
@@ -1713,6 +1741,11 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "sport": rec_json.get('sport', sport_hint or "Unknown")
         }
+        
+        # Validate the recommendation against actual games
+        if not validate_recommendation_against_games(result, game_descriptions):
+            logger.warning(f"Parlay recommendation failed validation: {result.get('recommendation', 'Unknown')}")
+            return {"error": "Generated recommendation does not match available games. Please try again."}
         
         # Standardize the response
         result = standardize_betting_response(raw_result, "parlay")
