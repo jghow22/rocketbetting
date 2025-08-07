@@ -617,14 +617,14 @@ def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: boo
     current_time = datetime.now(timezone.utc)
     current_date = current_time.date()
     
-    # For current day only, we want games that start within the next 12 hours from now
+    # For current day only, we want games that start within the next 48 hours from now
     if current_day_only:
-        # Only include games starting within the next 12 hours
-        max_future_time = current_time + timedelta(hours=12)
+        # Include games starting within the next 48 hours (covers today and tomorrow)
+        max_future_time = current_time + timedelta(hours=48)
         cutoff_time = current_time - timedelta(minutes=30)  # 30 minute buffer for games that just started
     else:
-        # For future games, limit to next 3 days maximum to avoid far-future games
-        max_future_time = current_time + timedelta(days=3)
+        # For future games, limit to next 7 days maximum to avoid far-future games
+        max_future_time = current_time + timedelta(days=7)
         cutoff_time = current_time - timedelta(minutes=30)  # 30 minute buffer for games that just started
     
     filtered_games = []
@@ -2521,8 +2521,8 @@ async def get_best_pick(
                                     time_until_game = game_time - current_time
                                     hours_until_game = time_until_game.total_seconds() / 3600
                                     
-                                    # Only include games happening within the next 48 hours
-                                    if 0 <= hours_until_game <= 48:
+                                    # Only include games happening within the next 72 hours (3 days)
+                                    if 0 <= hours_until_game <= 72:
                                         soon_games.append(game)
                                         logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
                                 except Exception as e:
@@ -2805,8 +2805,14 @@ async def get_sport_best_pick(
         for game in data:
             game["sport"] = sp
         
-        # Filter for current day matches only, then apply additional time restrictions
+        # Filter for current day matches first, then expand if needed
         data = filter_games_by_date(data, current_day_only=True)
+        logger.info(f"After current day filter for {sp}: {len(data)} games")
+        
+        if not data:
+            # If no current day games, try upcoming games
+            data = filter_games_by_date(data, current_day_only=False)
+            logger.info(f"After expanding to upcoming games for {sp}: {len(data)} games")
         
         if data:
             # Only include games that are actually happening soon
@@ -2824,8 +2830,8 @@ async def get_sport_best_pick(
                     time_until_game = game_time - current_time
                     hours_until_game = time_until_game.total_seconds() / 3600
                     
-                    # Only include games happening within the next 24 hours
-                    if 0 <= hours_until_game <= 24:
+                    # Only include games happening within the next 48 hours (2 days)
+                    if 0 <= hours_until_game <= 48:
                         soon_games.append(game)
                         logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
                 except Exception as e:
@@ -3045,8 +3051,8 @@ async def get_player_best_bet(
                     time_until_game = game_time - current_time
                     hours_until_game = time_until_game.total_seconds() / 3600
                     
-                    # Only include games happening within the next 24 hours
-                    if 0 <= hours_until_game <= 24:
+                    # Only include games happening within the next 48 hours (2 days)
+                    if 0 <= hours_until_game <= 48:
                         soon_games.append(game)
                         logger.info(f"Adding soon tennis game: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
                 except Exception as e:
