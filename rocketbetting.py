@@ -2478,66 +2478,98 @@ async def get_best_pick(
         in_season_sports = get_in_season_sports()
         logger.info(f"Fetching data for in-season sports: {in_season_sports}")
         
-        # Try to fetch real data first, but be more flexible with filtering
-        for sp, url in SPORTS_BASE_URLS.items():
-            # Skip sports that are not in season
-            if sp not in in_season_sports:
-                logger.info(f"Skipping {sp} - not in season")
-                continue
+        # Use the same data source as the schedule endpoint for consistency
+        logger.info("Using schedule data source for betting recommendations")
+        
+        # Get games from the schedule endpoint
+        try:
+            schedule_response = await get_games()
+            if isinstance(schedule_response, list) and schedule_response:
+                logger.info(f"Found {len(schedule_response)} games in schedule")
                 
-            try:
-                if sp == "TENNIS":
-                    # Generate tennis data with OpenAI since real data is problematic
-                    tennis_predictions = generate_current_day_tennis_predictions("straight", 3)
-                    if tennis_predictions:
-                        all_desc.extend(tennis_predictions)
-                        logger.info(f"Added {len(tennis_predictions)} OpenAI current day tennis predictions")
+                # Filter by requested sport if specified
+                if sport:
+                    requested_sport = sport.upper()
+                    filtered_games = [game for game in schedule_response if game.get("sport", "").upper() == requested_sport]
+                    logger.info(f"Filtered to {len(filtered_games)} games for {requested_sport}")
                 else:
-                    data = fetch_odds(API_KEY, url)
-                    if data:
-                        for game in data:
-                            game["sport"] = sp
-                        
-                        # Try current day first, then expand to upcoming games if needed
-                        filtered_data = filter_games_by_date(data, current_day_only=True)
-                        if not filtered_data:
-                            # If no current day games, try upcoming games (but still limited to 3 days)
-                            filtered_data = filter_games_by_date(data, current_day_only=False)
-                            logger.info(f"No current day games for {sp}, using upcoming games: {len(filtered_data)} found")
-                        
-                        if filtered_data:
-                            # Only include games that are actually happening soon
-                            soon_games = []
-                            current_time = datetime.now(timezone.utc)
-                            for game in filtered_data:
-                                try:
-                                    game_time_str = game.get("commence_time", "")
-                                    if game_time_str.endswith('Z'):
-                                        game_time_str = game_time_str[:-1] + '+00:00'
-                                    elif '+' not in game_time_str and 'T' in game_time_str:
-                                        game_time_str = game_time_str + '+00:00'
-                                    
-                                    game_time = datetime.fromisoformat(game_time_str)
-                                    time_until_game = game_time - current_time
-                                    hours_until_game = time_until_game.total_seconds() / 3600
-                                    
-                                    # Only include games happening within the next 72 hours (3 days)
-                                    if 0 <= hours_until_game <= 72:
-                                        soon_games.append(game)
-                                        logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
-                                except Exception as e:
-                                    logger.warning(f"Error processing game time for {sp}: {str(e)}")
-                                    continue
+                    # Use all in-season sports
+                    filtered_games = [game for game in schedule_response if game.get("sport", "").upper() in in_season_sports]
+                    logger.info(f"Filtered to {len(filtered_games)} games for in-season sports")
+                
+                if filtered_games:
+                    # Format games for AI analysis
+                    all_desc = format_odds_for_ai(filtered_games, sport or "ALL")
+                    logger.info(f"Formatted {len(all_desc)} game descriptions for AI analysis")
+                else:
+                    logger.warning("No games found in schedule for betting recommendations")
+            else:
+                logger.warning("Schedule endpoint returned no data")
+        except Exception as e:
+            logger.error(f"Error getting games from schedule: {str(e)}")
+            # Fallback to original method
+            logger.info("Falling back to original odds API method")
+            
+            # Try to fetch real data first, but be more flexible with filtering
+            for sp, url in SPORTS_BASE_URLS.items():
+                # Skip sports that are not in season
+                if sp not in in_season_sports:
+                    logger.info(f"Skipping {sp} - not in season")
+                    continue
+                    
+                try:
+                    if sp == "TENNIS":
+                        # Generate tennis data with OpenAI since real data is problematic
+                        tennis_predictions = generate_current_day_tennis_predictions("straight", 3)
+                        if tennis_predictions:
+                            all_desc.extend(tennis_predictions)
+                            logger.info(f"Added {len(tennis_predictions)} OpenAI current day tennis predictions")
+                    else:
+                        data = fetch_odds(API_KEY, url)
+                        if data:
+                            for game in data:
+                                game["sport"] = sp
                             
-                            if soon_games:
-                                all_desc.extend(format_odds_for_ai(soon_games, sp))
-                                logger.info(f"Added {len(soon_games)} soon games for {sp}")
+                            # Try current day first, then expand to upcoming games if needed
+                            filtered_data = filter_games_by_date(data, current_day_only=True)
+                            if not filtered_data:
+                                # If no current day games, try upcoming games (but still limited to 3 days)
+                                filtered_data = filter_games_by_date(data, current_day_only=False)
+                                logger.info(f"No current day games for {sp}, using upcoming games: {len(filtered_data)} found")
+                            
+                            if filtered_data:
+                                # Only include games that are actually happening soon
+                                soon_games = []
+                                current_time = datetime.now(timezone.utc)
+                                for game in filtered_data:
+                                    try:
+                                        game_time_str = game.get("commence_time", "")
+                                        if game_time_str.endswith('Z'):
+                                            game_time_str = game_time_str[:-1] + '+00:00'
+                                        elif '+' not in game_time_str and 'T' in game_time_str:
+                                            game_time_str = game_time_str + '+00:00'
+                                        
+                                        game_time = datetime.fromisoformat(game_time_str)
+                                        time_until_game = game_time - current_time
+                                        hours_until_game = time_until_game.total_seconds() / 3600
+                                        
+                                        # Only include games happening within the next 72 hours (3 days)
+                                        if 0 <= hours_until_game <= 72:
+                                            soon_games.append(game)
+                                            logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
+                                    except Exception as e:
+                                        logger.warning(f"Error processing game time for {sp}: {str(e)}")
+                                        continue
+                                
+                                if soon_games:
+                                    all_desc.extend(format_odds_for_ai(soon_games, sp))
+                                    logger.info(f"Added {len(soon_games)} soon games for {sp}")
+                                else:
+                                    logger.warning(f"No soon games found for {sp}")
                             else:
-                                logger.warning(f"No soon games found for {sp}")
-                        else:
-                            logger.warning(f"No valid games found for {sp}")
-            except Exception as e:
-                logger.warning(f"Error fetching odds for {sp}: {str(e)}")
+                                logger.warning(f"No valid games found for {sp}")
+                except Exception as e:
+                    logger.warning(f"Error fetching odds for {sp}: {str(e)}")
         
         # Generate recommendation if we have data
         if all_desc:
@@ -2792,58 +2824,84 @@ async def get_sport_best_pick(
         
         return {"sport_best_pick": result}
     else:
-        # Handle non-tennis sports normally
-        url = SPORTS_BASE_URLS.get(sp)
-        if not url:
-            return {"error": f"Sport not supported: {sport}"}
+        # Handle non-tennis sports using schedule data for consistency
+        logger.info(f"Using schedule data source for {sp} betting recommendations")
         
-        data = fetch_odds(API_KEY, url)
-        if not data:
-            return {"error": f"No games found for {sp}."}
-        
-        # Add sport to each game
-        for game in data:
-            game["sport"] = sp
-        
-        # Filter for current day matches first, then expand if needed
-        data = filter_games_by_date(data, current_day_only=True)
-        logger.info(f"After current day filter for {sp}: {len(data)} games")
-        
-        if not data:
-            # If no current day games, try upcoming games
-            data = filter_games_by_date(data, current_day_only=False)
-            logger.info(f"After expanding to upcoming games for {sp}: {len(data)} games")
-        
-        if data:
-            # Only include games that are actually happening soon
-            soon_games = []
-            current_time = datetime.now(timezone.utc)
-            for game in data:
-                try:
-                    game_time_str = game.get("commence_time", "")
-                    if game_time_str.endswith('Z'):
-                        game_time_str = game_time_str[:-1] + '+00:00'
-                    elif '+' not in game_time_str and 'T' in game_time_str:
-                        game_time_str = game_time_str + '+00:00'
-                    
-                    game_time = datetime.fromisoformat(game_time_str)
-                    time_until_game = game_time - current_time
-                    hours_until_game = time_until_game.total_seconds() / 3600
-                    
-                    # Only include games happening within the next 48 hours (2 days)
-                    if 0 <= hours_until_game <= 48:
-                        soon_games.append(game)
-                        logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
-                except Exception as e:
-                    logger.warning(f"Error processing game time for {sp}: {str(e)}")
-                    continue
-            
-            if soon_games:
-                data = soon_games
-                logger.info(f"Using {len(soon_games)} soon games for {sp}")
+        try:
+            # Get games from the schedule endpoint
+            schedule_response = await get_games()
+            if isinstance(schedule_response, list) and schedule_response:
+                logger.info(f"Found {len(schedule_response)} games in schedule")
+                
+                # Filter for the specific sport
+                filtered_games = [game for game in schedule_response if game.get("sport", "").upper() == sp]
+                logger.info(f"Filtered to {len(filtered_games)} games for {sp}")
+                
+                if filtered_games:
+                    data = filtered_games
+                    logger.info(f"Using {len(filtered_games)} games from schedule for {sp}")
+                else:
+                    logger.warning(f"No games found in schedule for {sp}")
+                    data = []
             else:
-                logger.warning(f"No soon games found for {sp}")
+                logger.warning("Schedule endpoint returned no data")
                 data = []
+        except Exception as e:
+            logger.error(f"Error getting games from schedule for {sp}: {str(e)}")
+            # Fallback to original method
+            logger.info(f"Falling back to original odds API method for {sp}")
+            
+            url = SPORTS_BASE_URLS.get(sp)
+            if not url:
+                return {"error": f"Sport not supported: {sport}"}
+            
+            data = fetch_odds(API_KEY, url)
+            if not data:
+                return {"error": f"No games found for {sp}."}
+            
+            # Add sport to each game
+            for game in data:
+                game["sport"] = sp
+            
+            # Filter for current day matches first, then expand if needed
+            data = filter_games_by_date(data, current_day_only=True)
+            logger.info(f"After current day filter for {sp}: {len(data)} games")
+            
+            if not data:
+                # If no current day games, try upcoming games
+                data = filter_games_by_date(data, current_day_only=False)
+                logger.info(f"After expanding to upcoming games for {sp}: {len(data)} games")
+            
+            if data:
+                # Only include games that are actually happening soon
+                soon_games = []
+                current_time = datetime.now(timezone.utc)
+                for game in data:
+                    try:
+                        game_time_str = game.get("commence_time", "")
+                        if game_time_str.endswith('Z'):
+                            game_time_str = game_time_str[:-1] + '+00:00'
+                        elif '+' not in game_time_str and 'T' in game_time_str:
+                            game_time_str = game_time_str + '+00:00'
+                        
+                        game_time = datetime.fromisoformat(game_time_str)
+                        time_until_game = game_time - current_time
+                        hours_until_game = time_until_game.total_seconds() / 3600
+                        
+                        # Only include games happening within the next 48 hours (2 days)
+                        if 0 <= hours_until_game <= 48:
+                            soon_games.append(game)
+                            logger.info(f"Adding soon game for {sp}: {game.get('home_team')} vs {game.get('away_team')} in {hours_until_game:.1f} hours")
+                    except Exception as e:
+                        logger.warning(f"Error processing game time for {sp}: {str(e)}")
+                        continue
+                
+                if soon_games:
+                    data = soon_games
+                    logger.info(f"Using {len(soon_games)} soon games for {sp}")
+                else:
+                    logger.warning(f"No soon games found for {sp}")
+                    data = []
         
         if not data:
             logger.warning(f"No games found for {sp}, attempting to generate fallback recommendation")
@@ -2938,21 +2996,47 @@ async def get_sport_best_parlay(
         else:
             return {"sport_best_parlay": {"error": "Unable to generate tennis parlay recommendation"}}
     else:
-        # Handle non-tennis sports normally
-        url = SPORTS_BASE_URLS.get(sp)
-        if not url:
-            return {"error": f"Sport not supported: {sport}"}
+        # Handle non-tennis sports using schedule data for consistency
+        logger.info(f"Using schedule data source for {sp} parlay recommendations")
         
-        data = fetch_odds(API_KEY, url)
-        if not data:
-            return {"error": f"No games found for {sp}."}
-        
-        # Add sport to each game
-        for game in data:
-            game["sport"] = sp
-        
-        # Filter for current and future matches (less restrictive)
-        data = filter_games_by_date(data, current_day_only=False)
+        try:
+            # Get games from the schedule endpoint
+            schedule_response = await get_games()
+            if isinstance(schedule_response, list) and schedule_response:
+                logger.info(f"Found {len(schedule_response)} games in schedule")
+                
+                # Filter for the specific sport
+                filtered_games = [game for game in schedule_response if game.get("sport", "").upper() == sp]
+                logger.info(f"Filtered to {len(filtered_games)} games for {sp}")
+                
+                if filtered_games:
+                    data = filtered_games
+                    logger.info(f"Using {len(filtered_games)} games from schedule for {sp}")
+                else:
+                    logger.warning(f"No games found in schedule for {sp}")
+                    data = []
+            else:
+                logger.warning("Schedule endpoint returned no data")
+                data = []
+        except Exception as e:
+            logger.error(f"Error getting games from schedule for {sp}: {str(e)}")
+            # Fallback to original method
+            logger.info(f"Falling back to original odds API method for {sp}")
+            
+            url = SPORTS_BASE_URLS.get(sp)
+            if not url:
+                return {"error": f"Sport not supported: {sport}"}
+            
+            data = fetch_odds(API_KEY, url)
+            if not data:
+                return {"error": f"No games found for {sp}."}
+            
+            # Add sport to each game
+            for game in data:
+                game["sport"] = sp
+            
+            # Filter for current and future matches (less restrictive)
+            data = filter_games_by_date(data, current_day_only=False)
         
         if not data:
             logger.warning(f"No games found for {sp}, attempting to generate fallback parlay recommendation")
