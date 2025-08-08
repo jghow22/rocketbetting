@@ -1816,8 +1816,8 @@ def generate_best_parlay_with_ai(game_descriptions: List[str]) -> Dict[str, Any]
         }
         
         # Validate the recommendation against actual games
-        if not validate_recommendation_against_games(result, game_descriptions):
-            logger.warning(f"Parlay recommendation failed validation: {result.get('recommendation', 'Unknown')}")
+        if not validate_parlay_recommendation_against_games(raw_result.get('recommendation', ''), game_descriptions):
+            logger.warning(f"Parlay recommendation failed validation: {raw_result.get('recommendation', 'Unknown')}")
             return {"error": "Generated recommendation does not match available games. Please try again."}
         
         # Standardize the response
@@ -4113,6 +4113,48 @@ async def test_cors():
         "origin": "test-cors-endpoint",
         "status": "success"
     }
+
+def validate_parlay_recommendation_against_games(parlay_text: str, game_descriptions: List[str]) -> bool:
+    """
+    Validate a parlay recommendation by ensuring each referenced team appears
+    in at least one of the provided game descriptions.
+    
+    Args:
+        parlay_text: The parlay string (e.g., "Yankees & Braves")
+        game_descriptions: List of formatted game descriptions sent to the AI
+    Returns:
+        True if at least two teams are identified and each appears in the games list
+    """
+    if not parlay_text or not game_descriptions:
+        return False
+    
+    text = parlay_text.strip()
+    # Strip common prefixes
+    if text.upper().startswith("PARLAY:"):
+        text = text.split(":", 1)[1].strip()
+    
+    # Split on common delimiters for parlays
+    try:
+        parts = re.split(r"\s*(?:&|\+|,|/| and )\s*", text, flags=re.IGNORECASE)
+    except Exception:
+        parts = [p.strip() for p in text.replace('&', ',').replace('+', ',').split(',')]
+    
+    # Normalize non-empty team tokens
+    teams = [p.strip() for p in parts if p and p.strip()]
+    if len(teams) < 2:
+        logger.warning(f"Parlay validation found fewer than 2 team tokens in '{parlay_text}' -> {teams}")
+        return False
+    
+    # Check each team appears in at least one game description
+    games_text = [gd.lower() for gd in game_descriptions]
+    for team in teams:
+        team_lc = team.lower()
+        if not any(team_lc in gd for gd in games_text):
+            logger.warning(f"Parlay team '{team}' not found in any available games")
+            return False
+    
+    logger.info(f"✅ Validated parlay teams against available games: {teams}")
+    return True
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
