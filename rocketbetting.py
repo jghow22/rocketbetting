@@ -1128,6 +1128,79 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
     
     return game_descriptions
 
+def format_schedule_games_for_ai(schedule_games: List[Dict[str, Any]], sport: str) -> List[str]:
+    """
+    Format schedule games data for AI analysis when odds data is not available.
+    Args:
+        schedule_games: List of games from schedule endpoint
+        sport: Sport code (e.g., NBA, NFL)
+    Returns:
+        List of formatted game descriptions for AI analysis
+    """
+    game_descriptions = []
+    
+    # Get today's date for context
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    
+    for game in schedule_games:
+        home_team = game.get("homeTeam") or game.get("home_team")
+        away_team = game.get("awayTeam") or game.get("away_team")
+        commence_time = game.get("raw_date") or game.get("commence_time", "")
+        game_sport = game.get("sport", sport)
+        
+        if not home_team or not away_team:
+            continue
+        
+        # Format game time and determine if it's today
+        game_time = ""
+        is_today = False
+        if commence_time:
+            try:
+                # Handle different time formats
+                if commence_time.endswith('Z'):
+                    commence_time = commence_time[:-1] + '+00:00'
+                elif '+' not in commence_time and 'T' in commence_time:
+                    commence_time = commence_time + '+00:00'
+                
+                dt = datetime.fromisoformat(commence_time)
+                game_time = f" on {dt.strftime('%Y-%m-%d at %H:%M UTC')}"
+                is_today = dt.strftime("%Y-%m-%d") == today
+            except ValueError:
+                pass
+        
+        # Add additional context based on sport
+        additional_context = ""
+        if game_sport == "NBA":
+            additional_context = f" | Context: NBA basketball game{', today' if is_today else ''}"
+        elif game_sport == "NHL":
+            additional_context = f" | Context: NHL hockey game{', today' if is_today else ''}"
+        elif game_sport == "NFL":
+            additional_context = f" | Context: NFL football game{', today' if is_today else ''}"
+        elif game_sport == "MLB":
+            additional_context = f" | Context: MLB baseball game{', today' if is_today else ''}"
+        elif game_sport == "MLS":
+            additional_context = f" | Context: MLS soccer match{', today' if is_today else ''}"
+        elif game_sport == "CFB":
+            additional_context = f" | Context: College football game{', today' if is_today else ''}"
+        elif game_sport == "TENNIS":
+            additional_context = f" | Context: Tennis match{', today' if is_today else ''}"
+        
+        # For schedule games without odds, create a basic description
+        if game_sport == "TENNIS":
+            game_descriptions.append(
+                f"{game_sport}: {home_team} vs {away_team}{game_time} | "
+                f"Match scheduled - odds not yet available | "
+                f"Source: Schedule{additional_context}"
+            )
+        else:
+            game_descriptions.append(
+                f"{game_sport}: {home_team} (Home) vs {away_team} (Away){game_time} | "
+                f"Game scheduled - odds not yet available | "
+                f"Source: Schedule{additional_context}"
+            )
+    
+    return game_descriptions
+
 def format_player_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]:
     """
     Format player prop bet data into human-readable descriptions for AI analysis.
@@ -1582,8 +1655,8 @@ def generate_best_pick_with_ai(game_descriptions: List[str]) -> Union[Dict[str, 
         }
         
         # Validate that the recommendation matches a real game
-        if not validate_recommendation_against_games(result, game_descriptions):
-            logger.warning(f"AI recommendation doesn't match any real games: {result.get('recommendation', 'Unknown')}")
+        if not validate_recommendation_against_games(raw_result, game_descriptions):
+            logger.warning(f"AI recommendation doesn't match any real games: {raw_result.get('recommendation', 'Unknown')}")
             return {"error": "Unable to generate a valid recommendation for current games. Please try again later."}
         
         # Standardize the response
@@ -2462,9 +2535,9 @@ async def get_best_pick(
                     logger.info(f"Filtered to {len(filtered_games)} games for in-season sports")
                 
                 if filtered_games:
-                    # Format games for AI analysis
-                    all_desc = format_odds_for_ai(filtered_games, sport or "ALL")
-                    logger.info(f"Formatted {len(all_desc)} game descriptions for AI analysis")
+                    # Format games for AI analysis using schedule format
+                    all_desc = format_schedule_games_for_ai(filtered_games, sport or "ALL")
+                    logger.info(f"Formatted {len(all_desc)} game descriptions for AI analysis from schedule")
                 else:
                     logger.warning("No games found in schedule for betting recommendations")
             else:
@@ -2566,8 +2639,8 @@ async def get_best_pick(
                     sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
                     
                     if sport_games:
-                        # Format these games for AI analysis
-                        sport_desc = format_odds_for_ai(sport_games, target_sport)
+                        # Format these games for AI analysis using schedule format
+                        sport_desc = format_schedule_games_for_ai(sport_games, target_sport)
                         if sport_desc:
                             logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport}")
                             result = generate_best_pick_with_ai(sport_desc)
@@ -2710,8 +2783,19 @@ async def get_best_parlay(
                                     continue
                             
                             if soon_games:
-                                all_desc.extend(format_odds_for_ai(soon_games, sp))
-                                logger.info(f"Added {len(soon_games)} soon games for {sp}")
+                                # Check if this is schedule data or odds data
+                                if soon_games and isinstance(soon_games, list) and len(soon_games) > 0:
+                                    first_game = soon_games[0]
+                                    if "homeTeam" in first_game or "awayTeam" in first_game:
+                                        # This is schedule data
+                                        all_desc.extend(format_schedule_games_for_ai(soon_games, sp))
+                                        logger.info(f"Added {len(soon_games)} soon games for {sp} from schedule data")
+                                    else:
+                                        # This is odds data
+                                        all_desc.extend(format_odds_for_ai(soon_games, sp))
+                                        logger.info(f"Added {len(soon_games)} soon games for {sp} from odds data")
+                                else:
+                                    logger.warning(f"No valid games found for {sp}")
                             else:
                                 logger.warning(f"No soon games found for {sp}")
             except Exception as e:
@@ -2745,8 +2829,8 @@ async def get_best_parlay(
                     sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
                     
                     if sport_games and len(sport_games) >= 2:  # Need at least 2 games for a parlay
-                        # Format these games for AI analysis
-                        sport_desc = format_odds_for_ai(sport_games, target_sport)
+                        # Format these games for AI analysis using schedule format
+                        sport_desc = format_schedule_games_for_ai(sport_games, target_sport)
                         if sport_desc:
                             logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} parlay")
                             result = generate_best_parlay_with_ai(sport_desc)
@@ -2936,8 +3020,21 @@ async def get_sport_best_pick(
         
         # Debug logging
         logger.info(f"Generating best pick for {sp} with {len(data)} games")
-        formatted_data = format_odds_for_ai(data, sp)
-        logger.info(f"Formatted {len(formatted_data)} game descriptions for AI")
+        
+        # Check if this is schedule data (has homeTeam/awayTeam) or odds data (has bookmakers)
+        if data and isinstance(data, list) and len(data) > 0:
+            first_game = data[0]
+            if "homeTeam" in first_game or "awayTeam" in first_game:
+                # This is schedule data
+                formatted_data = format_schedule_games_for_ai(data, sp)
+                logger.info(f"Formatted {len(formatted_data)} game descriptions for AI from schedule data")
+            else:
+                # This is odds data
+                formatted_data = format_odds_for_ai(data, sp)
+                logger.info(f"Formatted {len(formatted_data)} game descriptions for AI from odds data")
+        else:
+            formatted_data = []
+            logger.warning("No data to format for AI analysis")
         
         result = generate_best_pick_with_ai(formatted_data)
         logger.info(f"Generated result for {sp}: {result}")
@@ -3073,8 +3170,21 @@ async def get_sport_best_parlay(
         
         # Debug logging
         logger.info(f"Generating best parlay for {sp} with {len(data)} games")
-        formatted_data = format_odds_for_ai(data, sp)
-        logger.info(f"Formatted {len(formatted_data)} game descriptions for AI")
+        
+        # Check if this is schedule data (has homeTeam/awayTeam) or odds data (has bookmakers)
+        if data and isinstance(data, list) and len(data) > 0:
+            first_game = data[0]
+            if "homeTeam" in first_game or "awayTeam" in first_game:
+                # This is schedule data
+                formatted_data = format_schedule_games_for_ai(data, sp)
+                logger.info(f"Formatted {len(formatted_data)} game descriptions for AI from schedule data")
+            else:
+                # This is odds data
+                formatted_data = format_odds_for_ai(data, sp)
+                logger.info(f"Formatted {len(formatted_data)} game descriptions for AI from odds data")
+        else:
+            formatted_data = []
+            logger.warning("No data to format for AI analysis")
         
         result = generate_best_parlay_with_ai(formatted_data)
         logger.info(f"Generated parlay result for {sp}: {result}")
