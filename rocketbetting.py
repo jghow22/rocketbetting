@@ -2566,8 +2566,9 @@ async def get_best_pick(
                     logger.info(f"Filtered to {len(filtered_games)} games for in-season sports")
                 
                 if filtered_games:
-                    # Filter schedule games to next 48 hours, then format for AI
+                    # Filter schedule games to next 48 hours, then take the next-up game, then format for AI
                     filtered_games = filter_schedule_games_by_time(filtered_games, max_hours=48)
+                    filtered_games = sort_games_by_time(filtered_games)[:1]
                     all_desc = format_schedule_games_for_ai(filtered_games, sport or "ALL")
                     logger.info(f"Formatted {len(all_desc)} game descriptions for AI analysis from schedule (<=48h)")
                 else:
@@ -2671,11 +2672,12 @@ async def get_best_pick(
                     sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
                     
                     if sport_games:
-                        # Filter schedule games to next 48 hours, then format for AI
+                        # Filter schedule games to next 48 hours, then take the next-up game, then format for AI
                         sport_games = filter_schedule_games_by_time(sport_games, max_hours=48)
+                        sport_games = sort_games_by_time(sport_games)[:1]
                         sport_desc = format_schedule_games_for_ai(sport_games, target_sport)
                         if sport_desc:
-                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} (<=48h)")
+                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} (next-up <=48h)")
                             result = generate_best_pick_with_ai(sport_desc)
                             if result and not result.get("error"):
                                 bets_cache[cache_key] = result
@@ -2862,11 +2864,19 @@ async def get_best_parlay(
                     sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
                     
                     if sport_games and len(sport_games) >= 2:  # Need at least 2 games for a parlay
-                        # Keep only games in the next 48 hours, then format for AI
+                        # Keep only games in the next 48 hours and pick the next-up game
                         sport_games = filter_schedule_games_by_time(sport_games, max_hours=48)
-                        sport_desc = format_schedule_games_for_ai(sport_games, target_sport)
+                        data = sort_games_by_time(sport_games)[:1]
+                        logger.info(f"Using {len(data)} next-up game(s) from schedule for {target_sport} (<=48h)")
+                    else:
+                        logger.warning(f"No games found in schedule for {target_sport}")
+                        data = []
+                    
+                    if data:
+                        # Format for AI
+                        sport_desc = format_schedule_games_for_ai(data, target_sport)
                         if sport_desc:
-                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} parlay (<=48h)")
+                            logger.info(f"Using {len(sport_desc)} game descriptions for AI from schedule data")
                             result = generate_best_parlay_with_ai(sport_desc)
                             if result and not result.get("error"):
                                 bets_cache[cache_key] = result
@@ -4193,6 +4203,27 @@ def validate_parlay_recommendation_against_games(parlay_text: str, game_descript
     
     logger.info(f"✅ Validated parlay teams against available games: {teams}")
     return True
+
+# Helpers to parse and sort by game time
+
+def parse_game_time_iso(game: Dict[str, Any]) -> Optional[datetime]:
+    ts = game.get("raw_date") or game.get("commence_time", "")
+    if not ts:
+        return None
+    try:
+        if ts.endswith('Z'):
+            ts = ts[:-1] + '+00:00'
+        elif '+' not in ts and 'T' in ts:
+            ts = ts + '+00:00'
+        return datetime.fromisoformat(ts)
+    except Exception:
+        return None
+
+def sort_games_by_time(games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        games,
+        key=lambda g: (parse_game_time_iso(g) is None, parse_game_time_iso(g) or datetime.max.replace(tzinfo=timezone.utc))
+    )
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
