@@ -4225,5 +4225,60 @@ def sort_games_by_time(games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         key=lambda g: (parse_game_time_iso(g) is None, parse_game_time_iso(g) or datetime.max.replace(tzinfo=timezone.utc))
     )
 
+# ===================== NEW ENDPOINT: GAME-SPECIFIC BEST PICK =====================
+
+# Cache individual game picks for a shorter period (5 min) because user might click through quickly.
+game_pick_cache = TTLCache(maxsize=300, ttl=300)
+
+
+@app.get("/game-best-pick")
+async def get_game_best_pick(
+    home_team: str = Query(..., description="Home team name exactly as in schedule"),
+    away_team: str = Query(..., description="Away team name exactly as in schedule"),
+    sport: str = Query(..., description="Sport code (e.g., MLB, NBA)"),
+    fresh: bool = Query(False, description="Force regeneration even if cached")
+):
+    """Return a best straight-bet recommendation for the specific matchup that the user clicked in the schedule.
+
+    We build a single-game description and feed it into the existing AI helper so the response format stays consistent.
+    """
+
+    try:
+        cache_key = f"{sport}:{home_team}:{away_team}"
+        if not fresh and cache_key in game_pick_cache:
+            logger.info(f"Returning cached game pick for {cache_key}")
+            return {"game_best_pick": game_pick_cache[cache_key]}
+
+        sp = sport.upper()
+
+        # Create a minimal game description to provide context to the AI.
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M UTC")
+        description = f"{sp}: {home_team} (Home) vs {away_team} (Away) on {now_iso} | Source: UserSelectedSchedule"
+
+        ai_result = generate_best_pick_with_ai([description])
+
+        if ai_result.get("error"):
+            return {"game_best_pick": ai_result}
+
+        game_pick_cache[cache_key] = ai_result
+
+        # Optional: log metrics to Sheets
+        if sheets_manager and ai_result and not ai_result.get("error"):
+            try:
+                metrics_data = {
+                    "type": "api_usage",
+                    "value": 1,
+                    "sport": sp,
+                    "details": "game_best_pick endpoint"
+                }
+                sheets_manager.update_metrics(metrics_data)
+            except Exception as e:
+                logger.error(f"Error updating metrics for game_best_pick: {str(e)}")
+
+        return {"game_best_pick": ai_result}
+    except Exception as e:
+        logger.error(f"Unhandled error in get_game_best_pick: {str(e)}")
+        return {"error": f"Failed to generate game pick: {str(e)}"}
+
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
