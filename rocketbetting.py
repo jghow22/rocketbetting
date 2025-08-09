@@ -598,7 +598,7 @@ def get_primary_in_season_sport() -> str:
 
 # Create caches (TTL in seconds)
 games_cache = TTLCache(maxsize=100, ttl=600) # Cache games for 10 minutes
-bets_cache = TTLCache(maxsize=100, ttl=1800) # Cache bet recommendations for 30 minutes
+bets_cache = TTLCache(maxsize=100, ttl=900)  # Cache bet recommendations for 15 minutes to reduce stale picks
 
 def filter_games_by_date(games_data: List[Dict[str, Any]], current_day_only: bool = True) -> List[Dict[str, Any]]:
     """
