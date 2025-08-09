@@ -1128,6 +1128,37 @@ def format_odds_for_ai(odds_data: List[Dict[str, Any]], sport: str) -> List[str]
     
     return game_descriptions
 
+# New helper to time-filter schedule games
+
+def filter_schedule_games_by_time(schedule_games: List[Dict[str, Any]], max_hours: int = 48) -> List[Dict[str, Any]]:
+    """
+    Filter schedule games to those starting within the next max_hours hours (future only).
+    Accepts games with either 'raw_date' (from schedule) or 'commence_time'.
+    """
+    if not schedule_games:
+        return []
+    
+    current_time = datetime.now(timezone.utc)
+    filtered: List[Dict[str, Any]] = []
+    
+    for game in schedule_games:
+        try:
+            ts = game.get("raw_date") or game.get("commence_time", "")
+            if not ts:
+                continue
+            if ts.endswith('Z'):
+                ts = ts[:-1] + '+00:00'
+            elif '+' not in ts and 'T' in ts:
+                ts = ts + '+00:00'
+            dt = datetime.fromisoformat(ts)
+            hours_until = (dt - current_time).total_seconds() / 3600.0
+            if 0 <= hours_until <= max_hours:
+                filtered.append(game)
+        except Exception:
+            continue
+    
+    return filtered
+
 def format_schedule_games_for_ai(schedule_games: List[Dict[str, Any]], sport: str) -> List[str]:
     """
     Format schedule games data for AI analysis when odds data is not available.
@@ -2535,9 +2566,10 @@ async def get_best_pick(
                     logger.info(f"Filtered to {len(filtered_games)} games for in-season sports")
                 
                 if filtered_games:
-                    # Format games for AI analysis using schedule format
+                    # Filter schedule games to next 48 hours, then format for AI
+                    filtered_games = filter_schedule_games_by_time(filtered_games, max_hours=48)
                     all_desc = format_schedule_games_for_ai(filtered_games, sport or "ALL")
-                    logger.info(f"Formatted {len(all_desc)} game descriptions for AI analysis from schedule")
+                    logger.info(f"Formatted {len(all_desc)} game descriptions for AI analysis from schedule (<=48h)")
                 else:
                     logger.warning("No games found in schedule for betting recommendations")
             else:
@@ -2639,10 +2671,11 @@ async def get_best_pick(
                     sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
                     
                     if sport_games:
-                        # Format these games for AI analysis using schedule format
+                        # Filter schedule games to next 48 hours, then format for AI
+                        sport_games = filter_schedule_games_by_time(sport_games, max_hours=48)
                         sport_desc = format_schedule_games_for_ai(sport_games, target_sport)
                         if sport_desc:
-                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport}")
+                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} (<=48h)")
                             result = generate_best_pick_with_ai(sport_desc)
                             if result and not result.get("error"):
                                 bets_cache[cache_key] = result
@@ -2829,10 +2862,11 @@ async def get_best_parlay(
                     sport_games = [game for game in schedule_response if game.get("sport", "").upper() == target_sport]
                     
                     if sport_games and len(sport_games) >= 2:  # Need at least 2 games for a parlay
-                        # Format these games for AI analysis using schedule format
+                        # Keep only games in the next 48 hours, then format for AI
+                        sport_games = filter_schedule_games_by_time(sport_games, max_hours=48)
                         sport_desc = format_schedule_games_for_ai(sport_games, target_sport)
                         if sport_desc:
-                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} parlay")
+                            logger.info(f"Using {len(sport_desc)} games from schedule for {target_sport} parlay (<=48h)")
                             result = generate_best_parlay_with_ai(sport_desc)
                             if result and not result.get("error"):
                                 bets_cache[cache_key] = result
@@ -2939,8 +2973,10 @@ async def get_sport_best_pick(
                 logger.info(f"Filtered to {len(filtered_games)} games for {sp}")
                 
                 if filtered_games:
+                    # Keep only games in the next 48 hours
+                    filtered_games = filter_schedule_games_by_time(filtered_games, max_hours=48)
                     data = filtered_games
-                    logger.info(f"Using {len(filtered_games)} games from schedule for {sp}")
+                    logger.info(f"Using {len(filtered_games)} games from schedule for {sp} (<=48h)")
                 else:
                     logger.warning(f"No games found in schedule for {sp}")
                     data = []
@@ -3126,8 +3162,10 @@ async def get_sport_best_parlay(
                 logger.info(f"Filtered to {len(filtered_games)} games for {sp}")
                 
                 if filtered_games:
+                    # Keep only games in the next 48 hours
+                    filtered_games = filter_schedule_games_by_time(filtered_games, max_hours=48)
                     data = filtered_games
-                    logger.info(f"Using {len(filtered_games)} games from schedule for {sp}")
+                    logger.info(f"Using {len(filtered_games)} games from schedule for {sp} (<=48h)")
                 else:
                     logger.warning(f"No games found in schedule for {sp}")
                     data = []
