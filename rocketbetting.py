@@ -4280,5 +4280,49 @@ async def get_game_best_pick(
         logger.error(f"Unhandled error in get_game_best_pick: {str(e)}")
         return {"error": f"Failed to generate game pick: {str(e)}"}
 
+# Cache for individual game player props
+game_player_cache = TTLCache(maxsize=300, ttl=300)
+
+
+@app.get("/game-player-bet")
+async def get_game_player_bet(
+    home_team: str = Query(..., description="Home team name exactly as in schedule"),
+    away_team: str = Query(..., description="Away team name exactly as in schedule"),
+    sport: str = Query(..., description="Sport code (e.g., MLB, NBA)"),
+    fresh: bool = Query(False, description="Force regeneration even if cached")
+):
+    """Return a player-prop recommendation for the specific matchup the user clicked."""
+
+    try:
+        cache_key = f"{sport}:{home_team}:{away_team}"
+        if not fresh and cache_key in game_player_cache:
+            logger.info(f"Returning cached game player bet for {cache_key}")
+            return {"game_player_bet": game_player_cache[cache_key]}
+
+        sp = sport.upper()
+
+        # Build context for the AI – keep it simple so model focuses on these teams only
+        description = [
+            f"{sp}: Key players in upcoming matchup {home_team} vs {away_team}. Provide one high-confidence player prop bet for this game only."
+        ]
+
+        ai_result = generate_best_player_bet_with_ai(description)
+
+        if ai_result.get("error"):
+            return {"game_player_bet": ai_result}
+
+        # Basic validation: make sure recommended player belongs to one of the teams
+        rec_txt = json.dumps(ai_result).lower()
+        if home_team.lower() not in rec_txt and away_team.lower() not in rec_txt:
+            logger.warning("Player bet does not reference selected teams – flagging as error")
+            return {"game_player_bet": {"error": "Model did not return player from selected game"}}
+
+        game_player_cache[cache_key] = ai_result
+        return {"game_player_bet": ai_result}
+
+    except Exception as e:
+        logger.error(f"Unhandled error in get_game_player_bet: {str(e)}")
+        return {"error": f"Failed to generate game player bet: {str(e)}"}
+
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
