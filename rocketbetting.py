@@ -4382,15 +4382,14 @@ async def get_game_parlay(
 
 # Helper: fetch games for sport (re-use existing /games logic internally)
 def fetch_games_for_sport(sp: str) -> List[Dict[str, Any]]:
+    """Return list of games for sport from in-memory cache (preferred) or empty list."""
     try:
-        # Assume existing get_games logic accessible – we can call filter function here
-        games_data = []
-        with open('games_cache.json', 'r') as _f:
-            games_data = json.load(_f)
+        if games_cache:
+            # games_cache values are already formatted schedule dicts
+            return [g for g in games_cache.values() if g.get("sport", "").upper() == sp]
     except Exception:
         pass
-    # Fallback: empty list
-    return [g for g in games_data if g.get("sport", "").upper() == sp]
+    return []
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
