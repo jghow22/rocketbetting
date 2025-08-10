@@ -4324,5 +4324,73 @@ async def get_game_player_bet(
         logger.error(f"Unhandled error in get_game_player_bet: {str(e)}")
         return {"error": f"Failed to generate game player bet: {str(e)}"}
 
+# Cache for individual game parlays
+game_parlay_cache = TTLCache(maxsize=300, ttl=300)
+
+
+@app.get("/game-parlay")
+async def get_game_parlay(
+    home_team: str = Query(..., description="Home team name exactly as in schedule"),
+    away_team: str = Query(..., description="Away team name exactly as in schedule"),
+    sport: str = Query(..., description="Sport code (e.g., MLB, NBA)"),
+    fresh: bool = Query(False, description="Force regeneration even if cached")
+):
+    """Return a multi-leg parlay that MUST include the selected matchup as one of the legs."""
+
+    try:
+        cache_key = f"{sport}:{home_team}:{away_team}"
+        if not fresh and cache_key in game_parlay_cache:
+            logger.info(f"Returning cached game parlay for {cache_key}")
+            return {"game_parlay": game_parlay_cache[cache_key]}
+
+        sp = sport.upper()
+
+        # Build minimal descriptions list: selected game first + 2 other upcoming games of same sport if available
+        all_games = fetch_games_for_sport(sp)
+        selected_desc = f"{sp}: {home_team} vs {away_team}"
+
+        # pick up to 2 other distinct games
+        others = []
+        for g in all_games:
+            h = g.get("homeTeam", "")
+            a = g.get("awayTeam", "")
+            if {h.lower(), a.lower()} & {home_team.lower(), away_team.lower()}:
+                continue  # skip selected game or overlapping teams
+            others.append(f"{sp}: {h} vs {a}")
+            if len(others) == 2:
+                break
+
+        game_descriptions = [selected_desc] + others
+
+        ai_result = generate_best_parlay_with_ai(game_descriptions)
+
+        if ai_result.get("error"):
+            return {"game_parlay": ai_result}
+
+        text_ser = json.dumps(ai_result).lower()
+        # Ensure both selected teams appear
+        if home_team.lower() not in text_ser and away_team.lower() not in text_ser:
+            logger.warning("Parlay does not reference selected matchup – flagging as error")
+            return {"game_parlay": {"error": "Model did not include selected game in parlay"}}
+
+        game_parlay_cache[cache_key] = ai_result
+        return {"game_parlay": ai_result}
+
+    except Exception as e:
+        logger.error(f"Unhandled error in get_game_parlay: {str(e)}")
+        return {"error": f"Failed to generate game parlay: {str(e)}"}
+
+# Helper: fetch games for sport (re-use existing /games logic internally)
+def fetch_games_for_sport(sp: str) -> List[Dict[str, Any]]:
+    try:
+        # Assume existing get_games logic accessible – we can call filter function here
+        games_data = []
+        with open('games_cache.json', 'r') as _f:
+            games_data = json.load(_f)
+    except Exception:
+        pass
+    # Fallback: empty list
+    return [g for g in games_data if g.get("sport", "").upper() == sp]
+
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
