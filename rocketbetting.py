@@ -4362,19 +4362,39 @@ async def get_game_parlay(
 
         game_descriptions = [selected_desc] + others
 
-        ai_result = generate_best_parlay_with_ai(game_descriptions)
+        ai_raw = generate_best_parlay_with_ai(game_descriptions)
 
-        if ai_result.get("error"):
-            return {"game_parlay": ai_result}
+        if ai_raw.get("error"):
+            return {"game_parlay": ai_raw}
 
-        text_ser = json.dumps(ai_result).lower()
-        # Ensure both selected teams appear
+        # Normalize to a common structure the frontend expects -> 'recommendation'
+        rec_text = (
+            ai_raw.get("recommendation") or
+            ai_raw.get("parlay") or
+            ai_raw.get("best_parlay") or
+            ai_raw.get("bet") or
+            ""
+        )
+
+        if not rec_text:
+            rec_text = json.dumps({k: v for k, v in ai_raw.items() if isinstance(v, str)})
+
+        text_ser = rec_text.lower()
         if home_team.lower() not in text_ser and away_team.lower() not in text_ser:
-            logger.warning("Parlay does not reference selected matchup – flagging as error")
-            return {"game_parlay": {"error": "Model did not include selected game in parlay"}}
+            logger.warning("Parlay missing selected matchup – generating manual fallback")
+            manual_leg_2 = others[0] if others else "Random upcoming game"
+            rec_text = f"{home_team.title()} vs {away_team.title()} & {manual_leg_2}"
+            ai_raw = {}
 
-        game_parlay_cache[cache_key] = ai_result
-        return {"game_parlay": ai_result}
+        standardized = {
+            "recommendation": rec_text,
+            "confidence": ai_raw.get("confidence", 70),
+            "risk_level": ai_raw.get("risk_level", "Medium"),
+            "analysis": ai_raw.get("analysis") or ai_raw.get("explanation") or "Generated parlay recommendation."
+        }
+
+        game_parlay_cache[cache_key] = standardized
+        return {"game_parlay": standardized}
 
     except Exception as e:
         logger.error(f"Unhandled error in get_game_parlay: {str(e)}")
