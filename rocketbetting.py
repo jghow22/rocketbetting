@@ -4352,8 +4352,8 @@ async def get_game_parlay(
         # pick up to 2 other distinct games
         others = []
         for g in all_games:
-            h = g.get("homeTeam", "")
-            a = g.get("awayTeam", "")
+            h = g.get("homeTeam") or g.get("home_team") or ""
+            a = g.get("awayTeam") or g.get("away_team") or ""
             if {h.lower(), a.lower()} & {home_team.lower(), away_team.lower()}:
                 continue  # skip selected game or overlapping teams
             others.append(f"{sp}: {h} vs {a}")
@@ -4366,7 +4366,19 @@ async def get_game_parlay(
 
         if ai_raw.get("error"):
             logger.warning("AI failed to generate parlay – creating simple fallback parlay")
-            manual_leg_2 = others[0] if others else "Another upcoming game from the slate"
+            if others:
+                manual_leg_2 = others[0]
+            elif all_games:
+                # Choose a random alternative game that is not the selected matchup
+                alt_games = [g for g in all_games if (g.get("homeTeam") or g.get("home_team")) != home_team and (g.get("awayTeam") or g.get("away_team")) != away_team]
+                if alt_games:
+                    g = random.choice(alt_games)
+                    hh = g.get('homeTeam') or g.get('home_team')
+                    aa = g.get('awayTeam') or g.get('away_team')
+                    manual_leg_2 = f"{sp}: {hh} vs {aa}"
+                else:
+                    manual_leg_2 = "A second matchup from today's slate"
+            
             fallback = {
                 "recommendation": f"{home_team.title()} vs {away_team.title()} & {manual_leg_2}",
                 "confidence": 65,
@@ -4391,7 +4403,18 @@ async def get_game_parlay(
         text_ser = rec_text.lower()
         if home_team.lower() not in text_ser and away_team.lower() not in text_ser:
             logger.warning("Parlay missing selected matchup – generating manual fallback")
-            manual_leg_2 = others[0] if others else "Random upcoming game"
+            if others:
+                manual_leg_2 = others[0]
+            elif all_games:
+                alt_games = [g for g in all_games if (g.get("homeTeam") or g.get("home_team")) != home_team and (g.get("awayTeam") or g.get("away_team")) != away_team]
+                if alt_games:
+                    g = random.choice(alt_games)
+                    hh = g.get('homeTeam') or g.get('home_team')
+                    aa = g.get('awayTeam') or g.get('away_team')
+                    manual_leg_2 = f"{sp}: {hh} vs {aa}"
+                else:
+                    manual_leg_2 = "A second matchup from today's slate"
+            
             rec_text = f"{home_team.title()} vs {away_team.title()} & {manual_leg_2}"
             ai_raw = {}
 
@@ -4411,14 +4434,30 @@ async def get_game_parlay(
 
 # Helper: fetch games for sport (re-use existing /games logic internally)
 def fetch_games_for_sport(sp: str) -> List[Dict[str, Any]]:
-    """Return list of games for sport from in-memory cache (preferred) or empty list."""
+    """Return a *flattened* list of game dictionaries for the given sport.
+
+    The ``/games`` endpoint caches its results in ``games_cache`` where **each
+    cache value is a *list* of games** (keyed by "games:MLB", "games:all",
+    etc.).  The previous implementation mistakenly treated each value as a
+    single game dict which resulted in an empty list.  We now iterate through
+    all cached lists, flatten them, and then filter by the requested sport.
+    """
     try:
-        if games_cache:
-            # games_cache values are already formatted schedule dicts
-            return [g for g in games_cache.values() if g.get("sport", "").upper() == sp]
-    except Exception:
-        pass
-    return []
+        if not games_cache:
+            return []
+
+        flattened: List[Dict[str, Any]] = []
+        for val in games_cache.values():
+            if isinstance(val, list):
+                flattened.extend(val)
+            elif isinstance(val, dict):
+                flattened.append(val)
+
+        sp_upper = sp.upper()
+        return [g for g in flattened if g.get("sport", "").upper() == sp_upper]
+    except Exception as e:
+        logger.error(f"fetch_games_for_sport failed: {e}")
+        return []
 
 if __name__ == "__main__":
     uvicorn.run("rocketbetting:app", host="0.0.0.0", port=8000, reload=True)
